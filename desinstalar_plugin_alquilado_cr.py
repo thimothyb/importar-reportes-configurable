@@ -40,11 +40,14 @@ from rich.table import Table
 from cr_common import (
     CommandLog,
     RemoteCommandError,
+    apply_execution_mode,
     backup_remote_dir,
     connect_ssh,
     execute_remote,
+    is_local_mode,
     load_inventory,
     logger,
+    prompt_execution_mode,
     prompt_server_selection,
     q,
     run_remote_command,
@@ -100,7 +103,8 @@ def uninstall_on_server(server: Dict[str, Any]) -> UninstallResult:
     cleanup_errors: List[str] = []
 
     try:
-        console.print(f"[cyan]→ {result.server_name}: conectando por SSH...[/cyan]")
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]→ {result.server_name}: conectando {conn_label}...[/cyan]")
         ssh = connect_ssh(server)
         sftp = ssh.open_sftp()
 
@@ -194,7 +198,7 @@ def print_summary(results: Sequence[UninstallResult]) -> None:
 
 
 def main() -> None:
-    console.print("[bold cyan]Desinstalación del plugin alquilado · Informes Avanzados (por SSH)[/bold cyan]\n")
+    console.print("[bold cyan]Desinstalación del plugin alquilado · Informes Avanzados[/bold cyan]\n")
     console.print(
         "[bold red]Esto borra el CÓDIGO y las TABLAS de block_advanced_reports en toda la "
         "plataforma[/bold red] (no es por curso). Úsalo solo tras confirmar que ya migraste "
@@ -202,6 +206,8 @@ def main() -> None:
     )
     try:
         servers, _settings = load_inventory(INVENTORY_FILE)
+        exec_mode = prompt_execution_mode()
+        apply_execution_mode(servers, exec_mode)
         selected_servers = prompt_server_selection(servers)
         if not selected_servers:
             console.print("[yellow]No se seleccionaron plataformas. Operación cancelada.[/yellow]")

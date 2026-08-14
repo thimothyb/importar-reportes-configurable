@@ -46,11 +46,14 @@ from rich.table import Table
 from cr_common import (
     CommandLog,
     RemoteCommandError,
+    apply_execution_mode,
     backup_remote_dir,
     connect_ssh,
     execute_remote,
+    is_local_mode,
     load_inventory,
     logger,
+    prompt_execution_mode,
     prompt_server_selection,
     q,
     run_remote_command,
@@ -172,7 +175,8 @@ def deploy_to_server(server: Dict[str, Any], source_dir: Path) -> DeployResult:
     cleanup_errors: List[str] = []
 
     try:
-        console.print(f"[cyan]→ {result.server_name}: conectando por SSH...[/cyan]")
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]→ {result.server_name}: conectando {conn_label}...[/cyan]")
         ssh = connect_ssh(server)
         sftp = ssh.open_sftp()
 
@@ -290,9 +294,11 @@ def print_summary(results: Sequence[DeployResult]) -> None:
 
 
 def main() -> None:
-    console.print("[bold cyan]Despliegue del plugin propio · Configurable Reports (por SSH)[/bold cyan]\n")
+    console.print("[bold cyan]Despliegue del plugin propio · Configurable Reports[/bold cyan]\n")
     try:
         servers, settings = load_inventory(INVENTORY_FILE)
+        mode = prompt_execution_mode()
+        apply_execution_mode(servers, mode)
 
         default_source = settings.get("plugin_source_dir")
         if not default_source:

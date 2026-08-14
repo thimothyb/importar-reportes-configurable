@@ -38,11 +38,14 @@ from rich.table import Table
 from cr_common import (
     CommandLog,
     RemoteCommandError,
+    apply_execution_mode,
     connect_ssh,
     execute_remote,
+    is_local_mode,
     load_inventory,
     logger,
     parse_php_output,
+    prompt_execution_mode,
     prompt_server_selection,
     q,
     safe_cleanup,
@@ -89,7 +92,8 @@ def audit_server(server: Dict[str, Any]) -> AuditResult:
     cleanup_errors: List[str] = []
 
     try:
-        console.print(f"[cyan]→ {result.server_name}: conectando por SSH...[/cyan]")
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]→ {result.server_name}: conectando {conn_label}...[/cyan]")
         ssh = connect_ssh(server)
         sftp = ssh.open_sftp()
 
@@ -230,6 +234,8 @@ def main() -> None:
             raise FileNotFoundError(f"No se encontró el CLI PHP: {PHP_AUDITOR}")
 
         servers, _settings = load_inventory(INVENTORY_FILE)
+        mode = prompt_execution_mode()
+        apply_execution_mode(servers, mode)
         selected_servers = prompt_server_selection(servers)
         if not selected_servers:
             console.print("[yellow]No se seleccionaron plataformas. Operación cancelada.[/yellow]")

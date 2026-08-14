@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
 Utilidades compartidas por los scripts de migración "Configurable Reports"
-(por SSH):
+(por SSH o ejecución local directa):
 
   - auditar_cr.py                      → detecta cursos con el bloque alquilado activo.
   - desplegar_plugin_cr.py             → instala el plugin propio (código nuevo).
   - instalar_plantillas_cr.py          → agrega el bloque propio y sus plantillas por curso.
   - desinstalar_plugin_alquilado_cr.py → desinstala el plugin alquilado (a nivel de plataforma).
 
-Centraliza: carga de inventario.json, conexión SSH/SFTP (paramiko), ejecución
-remota con soporte de sudo por contraseña, empaquetado/descarga de backups, y
-parseo de la salida JSON que emiten los CLIs PHP entre los marcadores
+Centraliza: carga de inventario.json, conexión SSH/SFTP (paramiko) o ejecución
+local (subprocess/shutil), ejecución remota/local con soporte de sudo por
+contraseña, empaquetado/descarga de backups, y parseo de la salida JSON que
+emiten los CLIs PHP entre los marcadores
 <<<CR_RESULT>>> ... <<<END_CR_RESULT>>>.
 """
 
@@ -18,9 +19,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import posixpath
 import re
 import shlex
+import shutil
+import subprocess
 import uuid
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
@@ -84,6 +88,56 @@ def q(value: str) -> str:
     return shlex.quote(value)
 
 
+# ===========================================================================
+# Modo local: clases que emulan paramiko.SSHClient y paramiko.SFTPClient
+# usando subprocess y shutil, para ejecutar todo en el mismo servidor sin SSH.
+# ===========================================================================
+
+class LocalSFTP:
+    """Emula las operaciones SFTP de paramiko usando el filesystem local."""
+
+    def put(self, localpath: str, remotepath: str) -> None:
+        """Copia un archivo local a otra ruta local (equivale a sftp.put)."""
+        os.makedirs(os.path.dirname(remotepath), exist_ok=True)
+        shutil.copy2(localpath, remotepath)
+
+    def get(self, remotepath: str, localpath: str) -> None:
+        """Copia un archivo de una ruta local a otra (equivale a sftp.get)."""
+        os.makedirs(os.path.dirname(localpath), exist_ok=True)
+        shutil.copy2(remotepath, localpath)
+
+    def chmod(self, path: str, mode: int) -> None:
+        """Cambia permisos de un archivo local."""
+        os.chmod(path, mode)
+
+    def mkdir(self, path: str) -> None:
+        """Crea un directorio local (ignora si ya existe)."""
+        os.makedirs(path, exist_ok=True)
+
+    def close(self) -> None:
+        """No-op: no hay conexión que cerrar."""
+        pass
+
+
+class LocalSSH:
+    """
+    Emula paramiko.SSHClient para ejecución local con subprocess.
+    Los comandos se ejecutan en el shell del sistema directamente.
+    """
+
+    def open_sftp(self) -> LocalSFTP:
+        return LocalSFTP()
+
+    def close(self) -> None:
+        """No-op: no hay conexión que cerrar."""
+        pass
+
+
+def is_local_mode(server: Dict[str, Any]) -> bool:
+    """Devuelve True si el servidor está configurado para ejecución local."""
+    return bool(server.get("local", False))
+
+
 # --- Inventario -----------------------------------------------------------
 def load_inventory(path: Path) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -111,14 +165,22 @@ def load_inventory(path: Path) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not isinstance(servers, list) or not servers:
         raise ValueError("El inventario está vacío o su formato es inválido.")
 
-    required_fields = ("name", "host", "ssh_user", "moodle_path", "web_user")
     for idx, server in enumerate(servers, start=1):
         if not isinstance(server, dict):
             raise ValueError(f"Entrada inválida en servidor #{idx}: debe ser un objeto JSON.")
+
+        # En modo local solo se necesitan name, moodle_path y web_user.
+        if server.get("local"):
+            required_fields = ("name", "moodle_path", "web_user")
+        else:
+            required_fields = ("name", "host", "ssh_user", "moodle_path", "web_user")
+
         missing = [f for f in required_fields if not server.get(f)]
         if missing:
             raise ValueError(f"Servidor #{idx} incompleto. Faltan campos: {', '.join(missing)}")
         server.setdefault("port", 22)
+        server.setdefault("host", "localhost")
+        server.setdefault("ssh_user", "")
         server.setdefault("web_group", server["web_user"])
         server.setdefault("sudo_requires_password", False)
 
@@ -138,9 +200,37 @@ def normalize_courseids(value: Any) -> List[str]:
     return [t.strip() for t in tokens if str(t).strip()]
 
 
-# --- SSH --------------------------------------------------------------------
-def connect_ssh(server: Dict[str, Any]) -> paramiko.SSHClient:
-    """Crea conexión SSH usando contraseña y/o llave según inventario."""
+# --- Selección de modo de conexión -----------------------------------------
+def prompt_execution_mode() -> str:
+    """Pregunta al usuario si quiere conectar por SSH o ejecutar localmente."""
+    answer = questionary.select(
+        "¿Cómo ejecutar los comandos en el servidor?",
+        choices=[
+            Choice("Ejecución local (estoy en el mismo servidor)", "local"),
+            Choice("Conexión SSH (me conecto a un servidor remoto)", "ssh"),
+        ],
+    ).ask()
+    if answer is None:
+        raise KeyboardInterrupt
+    return answer
+
+
+def apply_execution_mode(servers: List[Dict[str, Any]], mode: str) -> None:
+    """Aplica el modo de ejecución elegido a todos los servidores."""
+    for server in servers:
+        server["local"] = (mode == "local")
+
+
+# --- SSH / Local ----------------------------------------------------------
+def connect_ssh(server: Dict[str, Any]):
+    """
+    Crea conexión SSH usando contraseña y/o llave según inventario,
+    o devuelve un LocalSSH si el servidor está en modo local.
+    """
+    if is_local_mode(server):
+        logger.info("Modo LOCAL para %s (sin SSH)", server.get("name", "?"))
+        return LocalSSH()
+
     client = paramiko.SSHClient()
 
     # Cargar known_hosts del sistema si existe; si no, usar WarningPolicy
@@ -171,17 +261,56 @@ def connect_ssh(server: Dict[str, Any]) -> paramiko.SSHClient:
     return client
 
 
+def _run_local_command(
+    command: str,
+    *,
+    sudo_password: Optional[str] = None,
+    timeout: int = 1800,
+) -> Tuple[int, str, str]:
+    """Ejecuta un comando localmente con subprocess."""
+    prepared_command = command
+    use_sudo_password = bool(sudo_password) and command.lstrip().startswith("sudo ")
+    if use_sudo_password:
+        prepared_command = command.replace("sudo ", "sudo -S -p '' ", 1)
+
+    logger.debug("Ejecutando (local): %s", command)
+    try:
+        proc = subprocess.run(
+            prepared_command,
+            shell=True,
+            capture_output=True,
+            timeout=timeout,
+            input=f"{sudo_password}\n" if use_sudo_password else None,
+            text=True,
+        )
+        stdout_text = proc.stdout or ""
+        stderr_text = proc.stderr or ""
+        exit_status = proc.returncode
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout ejecutando (local): %s", command)
+        return 1, "", f"Timeout ({timeout}s) ejecutando: {command}"
+
+    logger.debug("exit_status=%d stdout_len=%d stderr_len=%d", exit_status, len(stdout_text), len(stderr_text))
+    return exit_status, stdout_text, stderr_text
+
+
 def run_remote_command(
-    ssh: paramiko.SSHClient,
+    ssh,
     command: str,
     *,
     sudo_password: Optional[str] = None,
     timeout: int = 1800,
 ) -> Tuple[int, str, str]:
     """
-    Ejecuta un comando remoto y devuelve (exit_status, stdout, stderr).
+    Ejecuta un comando (remoto vía SSH o local vía subprocess) y devuelve
+    (exit_status, stdout, stderr).
     Si hay sudo password configurado y el comando inicia con 'sudo ', la envía por stdin.
     """
+    # --- Modo local: subprocess ---
+    if isinstance(ssh, LocalSSH):
+        return _run_local_command(command, sudo_password=sudo_password, timeout=timeout)
+
+    # --- Modo SSH: paramiko ---
     prepared_command = command
     use_sudo_password = bool(sudo_password) and command.lstrip().startswith("sudo ")
     if use_sudo_password:
@@ -209,7 +338,7 @@ def run_remote_command(
 
 def execute_remote(
     command_logs: List[CommandLog],
-    ssh: paramiko.SSHClient,
+    ssh,
     *,
     step: str,
     command: str,
@@ -217,7 +346,7 @@ def execute_remote(
     timeout: int = 1800,
     fail_on_error: bool = True,
 ) -> CommandLog:
-    """Ejecuta comando remoto, guarda su salida y opcionalmente falla si exit_status != 0."""
+    """Ejecuta comando remoto/local, guarda su salida y opcionalmente falla si exit_status != 0."""
     exit_status, stdout_text, stderr_text = run_remote_command(
         ssh, command, sudo_password=sudo_password, timeout=timeout
     )
@@ -231,7 +360,7 @@ def execute_remote(
 
 
 def safe_cleanup(
-    ssh: paramiko.SSHClient,
+    ssh,
     command: str,
     cleanup_errors: List[str],
     *,
@@ -249,8 +378,8 @@ def safe_cleanup(
 # --- Backups remotos --------------------------------------------------------
 def backup_remote_dir(  # noqa: PLR0913
     command_logs: List[CommandLog],
-    ssh: paramiko.SSHClient,
-    sftp: "paramiko.SFTPClient",
+    ssh,
+    sftp,
     *,
     remote_parent_dir: str,
     dir_name: str,
@@ -303,7 +432,8 @@ def prompt_server_selection(servers: Sequence[Dict[str, Any]]) -> List[Dict[str,
     """Checkbox para elegir 1, varios o todos los servidores."""
     choices = [Choice("✅ Todos los servidores", "__all__")]
     for index, server in enumerate(servers):
-        label = f"{server['name']} ({server['host']}:{server.get('port', 22)})"
+        mode_tag = " [LOCAL]" if server.get("local") else ""
+        label = f"{server['name']} ({server['host']}:{server.get('port', 22)}){mode_tag}"
         choices.append(Choice(label, str(index)))
 
     answer = questionary.checkbox(

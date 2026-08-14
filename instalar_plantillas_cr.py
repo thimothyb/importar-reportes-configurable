@@ -46,12 +46,15 @@ from rich.table import Table
 from cr_common import (
     CommandLog,
     RemoteCommandError,
+    apply_execution_mode,
     connect_ssh,
     execute_remote,
+    is_local_mode,
     load_inventory,
     logger,
     normalize_courseids,
     parse_php_output,
+    prompt_execution_mode,
     prompt_server_selection,
     q,
     safe_cleanup,
@@ -168,7 +171,8 @@ def rollback_on_server(
     cleanup_errors: List[str] = []
 
     try:
-        console.print(f"[cyan]→ {result.server_name}: conectando por SSH...[/cyan]")
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]→ {result.server_name}: conectando {conn_label}...[/cyan]")
         ssh = connect_ssh(server)
         sftp = ssh.open_sftp()
 
@@ -274,7 +278,8 @@ def install_templates_on_server(
     cleanup_errors: List[str] = []
 
     try:
-        console.print(f"[cyan]→ {result.server_name}: conectando por SSH...[/cyan]")
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]→ {result.server_name}: conectando {conn_label}...[/cyan]")
         ssh = connect_ssh(server)
         sftp = ssh.open_sftp()
 
@@ -598,10 +603,12 @@ def _run_rollback(servers: Sequence[Dict[str, Any]]) -> None:
 
 # --- main -------------------------------------------------------------------
 def main() -> None:
-    console.print("[bold cyan]Instalador/Migrador de plantillas · Configurable Reports (por SSH)[/bold cyan]\n")
+    console.print("[bold cyan]Instalador/Migrador de plantillas · Configurable Reports[/bold cyan]\n")
 
     try:
         servers, settings = load_inventory(INVENTORY_FILE)
+        exec_mode = prompt_execution_mode()
+        apply_execution_mode(servers, exec_mode)
 
         mode = prompt_mode()
 
