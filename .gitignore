@@ -1,2 +1,21 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Cache de Python
+__pycache__/
+*.pyc
+
+# Snapshots y backups
+snapshots/
+backups/
+
+# Logs
+logs/
+*.log
+
+# Archivos generados
 inventario.json
 auditoria_resultado.json
+
