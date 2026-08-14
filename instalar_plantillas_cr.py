@@ -437,17 +437,14 @@ def load_migration_targets(servers: Sequence[Dict[str, Any]]) -> Dict[str, List[
 
 
 def prompt_mode() -> str:
-    choices_labels = [
-        "Instalación normal (cursos indicados a mano)",
-        "Migración: sustituir TODOS los reportes en los cursos detectados por auditar_cr.py",
-        "Rollback: restaurar reportes desde un snapshot previo",
-    ]
-    choices_values = ["normal", "migration", "rollback"]
-    answer = safe_select("¿Qué quieres hacer?", choices=choices_labels)
+    answer = safe_select("¿Qué quieres hacer?", choices=[
+        ("Instalación normal (cursos indicados a mano)", "normal"),
+        ("Migración: sustituir TODOS los reportes en los cursos detectados por auditar_cr.py", "migration"),
+        ("Rollback: restaurar reportes desde un snapshot previo", "rollback"),
+    ])
     if answer is None:
         raise KeyboardInterrupt
-    idx = choices_labels.index(answer)
-    return choices_values[idx]
+    return answer
 
 
 def confirm_execution(server_count: int, template_count: int, *, force: bool, wipe: bool) -> bool:
@@ -536,15 +533,13 @@ def _run_rollback(servers: Sequence[Dict[str, Any]]) -> None:
 
         # Mostrar snapshots disponibles y dejar elegir.
         choices = []
-        choices_paths = []
         for snap_path in snapshots:
             snap_data = json.loads(snap_path.read_text(encoding="utf-8"))
             date_str = snap_data.get("snapshot_date", "fecha desconocida")
             courses = snap_data.get("courses", [])
             total_reports = sum(c.get("report_count", 0) for c in courses)
             label = f"{snap_path.name} — {date_str[:19]} — {len(courses)} curso(s), {total_reports} reporte(s)"
-            choices.append(label)
-            choices_paths.append(str(snap_path))
+            choices.append((label, str(snap_path)))
 
         chosen = safe_select(
             f"Snapshot a restaurar en «{server['name']}»:",
@@ -553,8 +548,7 @@ def _run_rollback(servers: Sequence[Dict[str, Any]]) -> None:
         if chosen is None:
             raise KeyboardInterrupt
 
-        chosen_idx = choices.index(chosen)
-        snapshot_file = Path(choices_paths[chosen_idx])
+        snapshot_file = Path(chosen)
 
         # Mostrar detalle del snapshot.
         snap_data = json.loads(snapshot_file.read_text(encoding="utf-8"))

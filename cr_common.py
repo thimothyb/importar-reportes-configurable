@@ -201,29 +201,23 @@ def normalize_courseids(value: Any) -> List[str]:
 
 
 # --- Fallback para terminales limitadas (Lightsail, etc.) -----------------
-def _questionary_available() -> bool:
-    """Detecta si questionary puede renderizar widgets interactivos."""
-    try:
-        # Intentar crear un prompt mínimo para verificar compatibilidad.
-        import prompt_toolkit
-        from prompt_toolkit.output import create_output
-        create_output()
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+_FORCE_SIMPLE_INPUT = True  # Forzar input() simple — questionary falla en muchos terminales web
 
 
-_USE_SIMPLE_INPUT: Optional[bool] = None
+def _normalize_options(choices) -> List[Tuple[str, str]]:
+    """Acepta List[str] o List[Tuple[str,str]] y devuelve siempre [(label, value)]."""
+    normalized = []
+    for c in choices:
+        if isinstance(c, (list, tuple)) and len(c) == 2:
+            normalized.append((str(c[0]), str(c[1])))
+        else:
+            normalized.append((str(c), str(c)))
+    return normalized
 
 
 def _use_simple_input() -> bool:
-    """Cachea la detección de terminal limitada."""
-    global _USE_SIMPLE_INPUT  # noqa: PLW0603
-    if _USE_SIMPLE_INPUT is None:
-        _USE_SIMPLE_INPUT = not _questionary_available()
-        if _USE_SIMPLE_INPUT:
-            console.print("[yellow]Terminal limitada detectada: usando entrada de texto simple.[/yellow]")
-    return _USE_SIMPLE_INPUT
+    """Siempre True: usamos input() simple para máxima compatibilidad."""
+    return _FORCE_SIMPLE_INPUT
 
 
 def _simple_select(question: str, options: List[Tuple[str, str]]) -> str:
@@ -280,57 +274,32 @@ def _simple_confirm(question: str, default: bool = False) -> bool:
     return raw in ("y", "yes", "si", "sí")
 
 
-# --- Wrappers de questionary con fallback ----------------------------------
-def safe_select(question: str, choices: List[Tuple[str, str]]) -> str:
-    """questionary.select con fallback a input() simple."""
-    if _use_simple_input():
-        return _simple_select(question, choices)
-    answer = questionary.select(
-        question,
-        choices=[Choice(label, value) for label, value in choices],
-    ).ask()
-    if answer is None:
-        raise KeyboardInterrupt
-    return answer
+# --- Wrappers con input() simple (sin questionary) -------------------------
+def safe_select(question: str, choices) -> str:
+    """Menú select usando input() simple. Acepta List[str] o List[Tuple[str,str]]."""
+    opts = _normalize_options(choices)
+    return _simple_select(question, opts)
 
 
-def safe_checkbox(question: str, choices: List[Tuple[str, str]]) -> List[str]:
-    """questionary.checkbox con fallback a input() simple."""
-    if _use_simple_input():
-        return _simple_checkbox(question, choices)
-    answer = questionary.checkbox(
-        question,
-        choices=[Choice(label, value) for label, value in choices],
-        validate=lambda values: True if values else "Debes seleccionar al menos una opción.",
-    ).ask()
-    if answer is None:
-        raise KeyboardInterrupt
-    return answer
+def safe_checkbox(question: str, choices) -> List[str]:
+    """Menú checkbox usando input() simple. Acepta List[str] o List[Tuple[str,str]]."""
+    opts = _normalize_options(choices)
+    return _simple_checkbox(question, opts)
 
 
 def safe_text(question: str, default: str = "", validate=None) -> str:
-    """questionary.text con fallback a input() simple."""
-    if _use_simple_input():
-        while True:
-            answer = _simple_text(question, default)
-            if validate is None or validate(answer) is True:
-                return answer
-            msg = validate(answer)
-            console.print(f"[red]{msg}[/red]")
-    answer = questionary.text(question, default=default, validate=validate).ask()
-    if answer is None:
-        raise KeyboardInterrupt
-    return answer
+    """Input de texto usando input() simple."""
+    while True:
+        answer = _simple_text(question, default)
+        if validate is None or validate(answer) is True:
+            return answer
+        msg = validate(answer)
+        console.print(f"[red]{msg}[/red]")
 
 
 def safe_confirm(question: str, default: bool = False) -> bool:
-    """questionary.confirm con fallback a input() simple."""
-    if _use_simple_input():
-        return _simple_confirm(question, default)
-    answer = questionary.confirm(question, default=default).ask()
-    if answer is None:
-        raise KeyboardInterrupt
-    return answer
+    """Confirmación usando input() simple."""
+    return _simple_confirm(question, default)
 
 
 # --- Selección de modo de conexión -----------------------------------------
@@ -563,7 +532,8 @@ def prompt_server_selection(servers: Sequence[Dict[str, Any]]) -> List[Dict[str,
     options: List[Tuple[str, str]] = [("Todos los servidores", "__all__")]
     for index, server in enumerate(servers):
         mode_tag = " [LOCAL]" if server.get("local") else ""
-        label = f"{server['name']} ({server['host']}:{server.get('port', 22)}){mode_tag}"
+        host_info = f"{server['host']}:{server.get('port', 22)}" if server.get("host") else "local"
+        label = f"{server['name']} ({host_info}){mode_tag}"
         options.append((label, str(index)))
 
     answer = safe_checkbox("Selecciona las plataformas destino:", options)
