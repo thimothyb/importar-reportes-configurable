@@ -39,7 +39,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import questionary
 from rich.console import Console
 from rich.table import Table
 
@@ -57,7 +56,11 @@ from cr_common import (
     prompt_execution_mode,
     prompt_server_selection,
     q,
+    safe_checkbox,
     safe_cleanup,
+    safe_confirm,
+    safe_select,
+    safe_text,
 )
 
 # --- Rutas y constantes -----------------------------------------------------
@@ -395,10 +398,10 @@ def resolve_courseids_for_server(server: Dict[str, Any], settings: Dict[str, Any
     if ids:
         return ids
 
-    answer = questionary.text(
+    answer = safe_text(
         f"IDs (o shortnames) de cursos para «{server['name']}», separados por coma:",
         validate=lambda v: True if normalize_courseids(v) else "Indica al menos un curso.",
-    ).ask()
+    )
     if answer is None:
         raise KeyboardInterrupt
     return normalize_courseids(answer)
@@ -434,23 +437,17 @@ def load_migration_targets(servers: Sequence[Dict[str, Any]]) -> Dict[str, List[
 
 
 def prompt_mode() -> str:
-    answer = questionary.select(
-        "¿Qué quieres hacer?",
-        choices=[
-            questionary.Choice("Instalación normal (cursos indicados a mano)", "normal"),
-            questionary.Choice(
-                "Migración: sustituir TODOS los reportes en los cursos detectados por auditar_cr.py",
-                "migration",
-            ),
-            questionary.Choice(
-                "Rollback: restaurar reportes desde un snapshot previo",
-                "rollback",
-            ),
-        ],
-    ).ask()
+    choices_labels = [
+        "Instalación normal (cursos indicados a mano)",
+        "Migración: sustituir TODOS los reportes en los cursos detectados por auditar_cr.py",
+        "Rollback: restaurar reportes desde un snapshot previo",
+    ]
+    choices_values = ["normal", "migration", "rollback"]
+    answer = safe_select("¿Qué quieres hacer?", choices=choices_labels)
     if answer is None:
         raise KeyboardInterrupt
-    return answer
+    idx = choices_labels.index(answer)
+    return choices_values[idx]
 
 
 def confirm_execution(server_count: int, template_count: int, *, force: bool, wipe: bool) -> bool:
@@ -461,10 +458,10 @@ def confirm_execution(server_count: int, template_count: int, *, force: bool, wi
         mode = "ACTUALIZANDO existentes"
     else:
         mode = "omitiendo existentes"
-    answer = questionary.text(
+    answer = safe_text(
         f"¿Importar {template_count} plantilla(s) en {server_count} plataforma(s) [{mode}]? (y/n)",
         validate=lambda v: True if v and v.strip().lower() in {"y", "n"} else "Responde y o n.",
-    ).ask()
+    )
     if answer is None:
         raise KeyboardInterrupt
     return answer.strip().lower() == "y"
@@ -539,22 +536,25 @@ def _run_rollback(servers: Sequence[Dict[str, Any]]) -> None:
 
         # Mostrar snapshots disponibles y dejar elegir.
         choices = []
+        choices_paths = []
         for snap_path in snapshots:
             snap_data = json.loads(snap_path.read_text(encoding="utf-8"))
             date_str = snap_data.get("snapshot_date", "fecha desconocida")
             courses = snap_data.get("courses", [])
             total_reports = sum(c.get("report_count", 0) for c in courses)
             label = f"{snap_path.name} — {date_str[:19]} — {len(courses)} curso(s), {total_reports} reporte(s)"
-            choices.append(questionary.Choice(label, str(snap_path)))
+            choices.append(label)
+            choices_paths.append(str(snap_path))
 
-        chosen = questionary.select(
+        chosen = safe_select(
             f"Snapshot a restaurar en «{server['name']}»:",
             choices=choices,
-        ).ask()
+        )
         if chosen is None:
             raise KeyboardInterrupt
 
-        snapshot_file = Path(chosen)
+        chosen_idx = choices.index(chosen)
+        snapshot_file = Path(choices_paths[chosen_idx])
 
         # Mostrar detalle del snapshot.
         snap_data = json.loads(snapshot_file.read_text(encoding="utf-8"))
@@ -563,11 +563,11 @@ def _run_rollback(servers: Sequence[Dict[str, Any]]) -> None:
         for c in snap_data.get("courses", []):
             console.print(f"  • Curso {c['courseid']} ({c.get('coursename', '?')}): {c.get('report_count', 0)} reporte(s)")
 
-        confirm = questionary.text(
+        confirm = safe_text(
             f"¿Restaurar estos reportes en «{server['name']}»? "
             "Esto BORRARÁ los reportes actuales y los reemplazará por los del snapshot. (y/n)",
             validate=lambda v: True if v and v.strip().lower() in {"y", "n"} else "Responde y o n.",
-        ).ask()
+        )
         if confirm is None or confirm.strip().lower() != "y":
             console.print(f"[yellow]Rollback cancelado para «{server['name']}».[/yellow]")
             continue
@@ -620,7 +620,7 @@ def main() -> None:
             raise FileNotFoundError(f"No se encontró el CLI PHP: {PHP_IMPORTER}")
 
         default_dir = str(settings.get("templates_dir") or DEFAULT_TEMPLATES_DIR)
-        dir_answer = questionary.text("Carpeta local con las plantillas (.xml):", default=default_dir).ask()
+        dir_answer = safe_text("Carpeta local con las plantillas (.xml):", default=default_dir)
         if dir_answer is None:
             raise KeyboardInterrupt
         templates_dir = Path(dir_answer.strip().strip('"').strip("'")).expanduser()
@@ -640,20 +640,20 @@ def main() -> None:
         addblock = mode == "migration"
 
         if mode == "normal":
-            wipe = questionary.confirm(
+            wipe = safe_confirm(
                 "¿Borrar TODOS los reportes propios existentes en esos cursos antes de crear los nuevos?",
                 default=False,
-            ).ask()
+            )
             if wipe is None:
                 raise KeyboardInterrupt
 
         force = wipe or bool(settings.get("force", False))
 
         if mode == "normal" and not wipe and not settings.get("force"):
-            force = questionary.confirm(
+            force = safe_confirm(
                 "¿Actualizar reportes existentes con el mismo nombre? (No = omitirlos)",
                 default=False,
-            ).ask()
+            )
             if force is None:
                 raise KeyboardInterrupt
 

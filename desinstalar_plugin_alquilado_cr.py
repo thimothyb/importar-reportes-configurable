@@ -33,7 +33,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import questionary
 from rich.console import Console
 from rich.table import Table
 
@@ -51,6 +50,7 @@ from cr_common import (
     prompt_server_selection,
     q,
     run_remote_command,
+    safe_text,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -225,10 +225,10 @@ def main() -> None:
                 blocked_names.add(s["name"])
 
         if blocked_names:
-            override = questionary.text(
+            override = safe_text(
                 "¿Continuar de todas formas con las plataformas marcadas en rojo? (y/n)",
                 validate=lambda v: True if v and v.strip().lower() in {"y", "n"} else "Responde y o n.",
-            ).ask()
+            )
             if override is None or override.strip().lower() != "y":
                 selected_servers = [s for s in selected_servers if s["name"] not in blocked_names]
                 console.print("[yellow]Se excluyen las plataformas con migración pendiente.[/yellow]")
@@ -241,9 +241,9 @@ def main() -> None:
         for s in selected_servers:
             console.print(f"  • {s['name']} ({s['host']})")
 
-        confirm = questionary.text(
+        confirm = safe_text(
             "Escribe DESINSTALAR para confirmar (cualquier otra cosa cancela):",
-        ).ask()
+        )
         if confirm is None or confirm.strip() != "DESINSTALAR":
             console.print("[yellow]Operación cancelada por el usuario.[/yellow]")
             return

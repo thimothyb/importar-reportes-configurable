@@ -36,8 +36,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Sequence
 
-import questionary
-
 if TYPE_CHECKING:
     import paramiko
 from rich.console import Console
@@ -58,6 +56,7 @@ from cr_common import (
     q,
     run_remote_command,
     safe_cleanup,
+    safe_text,
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -310,12 +309,10 @@ def main() -> None:
                 guess = SCRIPT_DIR.parent / "moodle-plugin-reporte-configurable" / "configurable_reports"
                 default_source = str(guess) if guess.is_dir() else ""
 
-        source_answer = questionary.text(
+        source_answer = safe_text(
             "Carpeta o ZIP del plugin propio (la que contiene version.php):",
             default=default_source,
-        ).ask()
-        if source_answer is None:
-            raise KeyboardInterrupt
+        )
         source_path = Path(source_answer.strip().strip('"').strip("'")).expanduser()
         source_dir, tmp_dir_handle = resolve_plugin_source(source_path)
         validate_plugin_source(source_dir)
@@ -332,11 +329,11 @@ def main() -> None:
         for s in selected_servers:
             console.print(f"  • {s['name']} ({s['host']})")
 
-        answer = questionary.text(
+        answer = safe_text(
             "¿Continuar? Se hará backup local antes de sustituir cada plataforma. (y/n)",
             validate=lambda v: True if v and v.strip().lower() in {"y", "n"} else "Responde y o n.",
-        ).ask()
-        if answer is None or answer.strip().lower() != "y":
+        )
+        if answer.strip().lower() != "y":
             console.print("[yellow]Operación cancelada por el usuario.[/yellow]")
             return
 

@@ -200,19 +200,149 @@ def normalize_courseids(value: Any) -> List[str]:
     return [t.strip() for t in tokens if str(t).strip()]
 
 
-# --- Selección de modo de conexión -----------------------------------------
-def prompt_execution_mode() -> str:
-    """Pregunta al usuario si quiere conectar por SSH o ejecutar localmente."""
+# --- Fallback para terminales limitadas (Lightsail, etc.) -----------------
+def _questionary_available() -> bool:
+    """Detecta si questionary puede renderizar widgets interactivos."""
+    try:
+        # Intentar crear un prompt mínimo para verificar compatibilidad.
+        import prompt_toolkit
+        from prompt_toolkit.output import create_output
+        create_output()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_USE_SIMPLE_INPUT: Optional[bool] = None
+
+
+def _use_simple_input() -> bool:
+    """Cachea la detección de terminal limitada."""
+    global _USE_SIMPLE_INPUT  # noqa: PLW0603
+    if _USE_SIMPLE_INPUT is None:
+        _USE_SIMPLE_INPUT = not _questionary_available()
+        if _USE_SIMPLE_INPUT:
+            console.print("[yellow]Terminal limitada detectada: usando entrada de texto simple.[/yellow]")
+    return _USE_SIMPLE_INPUT
+
+
+def _simple_select(question: str, options: List[Tuple[str, str]]) -> str:
+    """Menú select simple con input() para terminales sin soporte TUI."""
+    console.print(f"\n[bold]{question}[/bold]")
+    for i, (label, _value) in enumerate(options, 1):
+        console.print(f"  {i}) {label}")
+    while True:
+        try:
+            raw = input(f"Elige (1-{len(options)}): ").strip()
+        except EOFError:
+            raise KeyboardInterrupt
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1][1]
+        console.print(f"[red]Opción inválida. Elige un número entre 1 y {len(options)}.[/red]")
+
+
+def _simple_checkbox(question: str, options: List[Tuple[str, str]]) -> List[str]:
+    """Menú checkbox simple con input() para terminales sin soporte TUI."""
+    console.print(f"\n[bold]{question}[/bold]")
+    for i, (label, _value) in enumerate(options, 1):
+        console.print(f"  {i}) {label}")
+    console.print("  Separa con comas para elegir varios, ej: 1,3")
+    while True:
+        try:
+            raw = input(f"Elige (1-{len(options)}): ").strip()
+        except EOFError:
+            raise KeyboardInterrupt
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if all(p.isdigit() and 1 <= int(p) <= len(options) for p in parts) and parts:
+            return [options[int(p) - 1][1] for p in parts]
+        console.print("[red]Opción inválida.[/red]")
+
+
+def _simple_text(question: str, default: str = "") -> str:
+    """Input de texto simple con input()."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        raw = input(f"{question}{suffix}: ").strip()
+    except EOFError:
+        raise KeyboardInterrupt
+    return raw if raw else default
+
+
+def _simple_confirm(question: str, default: bool = False) -> bool:
+    """Confirmación simple con input()."""
+    hint = "Y/n" if default else "y/N"
+    try:
+        raw = input(f"{question} ({hint}): ").strip().lower()
+    except EOFError:
+        raise KeyboardInterrupt
+    if not raw:
+        return default
+    return raw in ("y", "yes", "si", "sí")
+
+
+# --- Wrappers de questionary con fallback ----------------------------------
+def safe_select(question: str, choices: List[Tuple[str, str]]) -> str:
+    """questionary.select con fallback a input() simple."""
+    if _use_simple_input():
+        return _simple_select(question, choices)
     answer = questionary.select(
-        "¿Cómo ejecutar los comandos en el servidor?",
-        choices=[
-            Choice("Ejecución local (estoy en el mismo servidor)", "local"),
-            Choice("Conexión SSH (me conecto a un servidor remoto)", "ssh"),
-        ],
+        question,
+        choices=[Choice(label, value) for label, value in choices],
     ).ask()
     if answer is None:
         raise KeyboardInterrupt
     return answer
+
+
+def safe_checkbox(question: str, choices: List[Tuple[str, str]]) -> List[str]:
+    """questionary.checkbox con fallback a input() simple."""
+    if _use_simple_input():
+        return _simple_checkbox(question, choices)
+    answer = questionary.checkbox(
+        question,
+        choices=[Choice(label, value) for label, value in choices],
+        validate=lambda values: True if values else "Debes seleccionar al menos una opción.",
+    ).ask()
+    if answer is None:
+        raise KeyboardInterrupt
+    return answer
+
+
+def safe_text(question: str, default: str = "", validate=None) -> str:
+    """questionary.text con fallback a input() simple."""
+    if _use_simple_input():
+        while True:
+            answer = _simple_text(question, default)
+            if validate is None or validate(answer) is True:
+                return answer
+            msg = validate(answer)
+            console.print(f"[red]{msg}[/red]")
+    answer = questionary.text(question, default=default, validate=validate).ask()
+    if answer is None:
+        raise KeyboardInterrupt
+    return answer
+
+
+def safe_confirm(question: str, default: bool = False) -> bool:
+    """questionary.confirm con fallback a input() simple."""
+    if _use_simple_input():
+        return _simple_confirm(question, default)
+    answer = questionary.confirm(question, default=default).ask()
+    if answer is None:
+        raise KeyboardInterrupt
+    return answer
+
+
+# --- Selección de modo de conexión -----------------------------------------
+def prompt_execution_mode() -> str:
+    """Pregunta al usuario si quiere conectar por SSH o ejecutar localmente."""
+    return safe_select(
+        "¿Cómo ejecutar los comandos en el servidor?",
+        [
+            ("Ejecución local (estoy en el mismo servidor)", "local"),
+            ("Conexión SSH (me conecto a un servidor remoto)", "ssh"),
+        ],
+    )
 
 
 def apply_execution_mode(servers: List[Dict[str, Any]], mode: str) -> None:
@@ -430,19 +560,13 @@ def parse_php_output(stdout_text: str) -> Optional[Dict[str, Any]]:
 # --- Interacción compartida -------------------------------------------------
 def prompt_server_selection(servers: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Checkbox para elegir 1, varios o todos los servidores."""
-    choices = [Choice("✅ Todos los servidores", "__all__")]
+    options: List[Tuple[str, str]] = [("Todos los servidores", "__all__")]
     for index, server in enumerate(servers):
         mode_tag = " [LOCAL]" if server.get("local") else ""
         label = f"{server['name']} ({server['host']}:{server.get('port', 22)}){mode_tag}"
-        choices.append(Choice(label, str(index)))
+        options.append((label, str(index)))
 
-    answer = questionary.checkbox(
-        "Selecciona las plataformas destino:",
-        choices=choices,
-        validate=lambda values: True if values else "Debes seleccionar al menos una plataforma.",
-    ).ask()
-    if answer is None:
-        raise KeyboardInterrupt
+    answer = safe_checkbox("Selecciona las plataformas destino:", options)
     if "__all__" in answer:
         return list(servers)
     selected = {int(item) for item in answer}
