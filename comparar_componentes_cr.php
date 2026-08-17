@@ -31,7 +31,17 @@ foreach (array_slice($argv, 1) as $token) {
 }
 
 function cr_emit(array $payload, int $exitcode): void {
-    fwrite(STDOUT, "<<<CR_RESULT>>>" . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "<<<END_CR_RESULT>>>\n");
+    $flags = JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE;
+    $json = json_encode($payload, $flags);
+    if ($json === false) {
+        // Fallback: limpiar UTF-8 recursivamente e intentar de nuevo.
+        $payload = json_decode(json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE), true) ?? $payload;
+        $json = json_encode($payload, $flags);
+    }
+    if ($json === false) {
+        $json = json_encode(['ok' => false, 'fatal' => 'json_encode falló: ' . json_last_error_msg()], $flags);
+    }
+    fwrite(STDOUT, "<<<CR_RESULT>>>" . $json . "<<<END_CR_RESULT>>>\n");
     exit($exitcode);
 }
 
