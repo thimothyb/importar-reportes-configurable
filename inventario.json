@@ -1,0 +1,37 @@
+{
+  "settings": {
+    "templates_dir": "",
+    "force": null,
+    "owner": null,
+    "report_courseids": [],
+    "plugin_source_dir": ""
+  },
+  "servers": [
+    {
+      "name": "Development (sanase-test2)",
+      "local": false,
+      "host": "172.26.3.43",
+      "port": 22,
+      "ssh_user": "ubuntu",
+      "moodle_path": "/var/www/html/moodle/sanase-test2",
+      "web_user": "www-data",
+      "web_group": "www-data",
+      "sudo_requires_password": false,
+      "sudo_password": "",
+      "report_courseids": []
+    },
+    {
+      "name": "ASPASIA-01 (sanase)",
+      "local": false,
+      "host": "15.224.91.85",
+      "port": 22,
+      "ssh_user": "ubuntu",
+      "moodle_path": "/var/www/html/moodle/sanase",
+      "web_user": "www-data",
+      "web_group": "www-data",
+      "sudo_requires_password": false,
+      "sudo_password": "",
+      "report_courseids": []
+    }
+  ]
+}
