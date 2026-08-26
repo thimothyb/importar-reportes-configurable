@@ -1,289 +1,324 @@
-<?php
-/**
- * CLI para COMPARAR los datos que generan ambos plugins de reportes:
- *   - Propio:    block_configurable_reports
- *   - Alquilado: block_advanced_reports
- *
- * Para cada curso indicado:
- *   1. Lista los reportes de AMBOS plugins (configuración: nombre, tipo, SQL).
- *   2. Ejecuta cada reporte SQL y captura las primeras N filas del resultado.
- *   3. Emite todo como JSON entre marcadores <<<CR_RESULT>>>...<<<END_CR_RESULT>>>
- *
- * Parámetros:
- *   --config=/ruta/a/config.php   (obligatorio)
- *   --courses=2,3,4               (obligatorio: ids separados por coma)
- *   --maxrows=20                  (opcional: máx filas por reporte, def 50)
- *
- * @package   block_configurable_reports
- * @copyright 2026 Awakelab
- * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- */
+#!/usr/bin/env python3
+"""
+Compara el campo `components` deserializado de reportes con nombre
+coincidente entre ambos plugins:
+  - Propio:    block_configurable_reports
+  - Alquilado: block_advanced_reports
 
-$cliargs = [];
-foreach (array_slice($argv, 1) as $token) {
-    if (preg_match('/^--([^=]+)=(.*)$/s', $token, $m)) {
-        $cliargs[$m[1]] = $m[2];
-    } else if (preg_match('/^--([^=]+)$/', $token, $m)) {
-        $cliargs[$m[1]] = true;
-    }
-}
+Sube comparar_componentes_cr.php al servidor, lo ejecuta como www-data,
+y genera un reporte detallado de diferencias en consola + archivo JSON.
 
-function cr_emit(array $payload, int $exitcode): void {
-    fwrite(STDOUT, "<<<CR_RESULT>>>" . json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT) . "<<<END_CR_RESULT>>>\n");
-    exit($exitcode);
-}
+Usa los cursos de auditoria_resultado.json (los mismos de la migración).
+"""
 
-if (empty($cliargs['config']) || !is_readable($cliargs['config'])) {
-    cr_emit(['ok' => false, 'fatal' => 'Falta --config con la ruta a config.php válida'], 2);
-}
-if (empty($cliargs['courses'])) {
-    cr_emit(['ok' => false, 'fatal' => 'Falta --courses (ids separados por coma)'], 2);
-}
+from __future__ import annotations
 
-$courseids = array_filter(array_map('intval', explode(',', $cliargs['courses'])));
-$maxrows = isset($cliargs['maxrows']) ? (int) $cliargs['maxrows'] : 50;
+import json
+import posixpath
+import sys
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List
 
-define('CLI_SCRIPT', true);
-define('NO_OUTPUT_BUFFERING', true);
-require($cliargs['config']);
-global $CFG, $DB;
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
 
-// Cargar locallib del plugin propio si existe (para cr_unserialize).
-$ownlocallib = $CFG->dirroot . '/blocks/configurable_reports/locallib.php';
-$hasownplugin = is_readable($ownlocallib);
-if ($hasownplugin) {
-    require_once($ownlocallib);
-}
+from cr_common import (
+    apply_execution_mode,
+    connect_ssh,
+    execute_remote,
+    is_local_mode,
+    load_inventory,
+    parse_php_output,
+    prompt_execution_mode,
+    prompt_server_selection,
+    q,
+    safe_cleanup,
+    safe_text,
+)
 
-/**
- * Extrae la consulta SQL de un reporte de configurable_reports.
- */
-function extract_own_sql($report): ?string {
-    if (!function_exists('cr_unserialize')) {
-        return null;
-    }
-    $components = cr_unserialize($report->components);
-    if (is_array($components) && isset($components['customsql']['config']->querysql)) {
-        return $components['customsql']['config']->querysql;
-    }
-    return null;
-}
+SCRIPT_DIR = Path(__file__).resolve().parent
+INVENTORY_FILE = SCRIPT_DIR / "inventario.json"
+AUDIT_SNAPSHOT_FILE = SCRIPT_DIR / "auditoria_resultado.json"
+PHP_COMPARATOR = SCRIPT_DIR / "comparar_componentes_cr.php"
+OUTPUT_FILE = SCRIPT_DIR / "comparacion_componentes_resultado.json"
+REMOTE_TMP_DIR = "/tmp"
 
-/**
- * Intenta extraer la consulta SQL de un reporte del plugin alquilado.
- * El esquema puede variar; probamos campos comunes.
- */
-function extract_rented_sql($report): ?string {
-    // Intentar con campo 'components' si existe
-    if (!empty($report->components)) {
-        // Intentar deserializar con cr_unserialize si está disponible
-        if (function_exists('cr_unserialize')) {
-            $components = cr_unserialize($report->components);
-            if (is_array($components) && isset($components['customsql']['config']->querysql)) {
-                return $components['customsql']['config']->querysql;
-            }
-        }
-        // Intentar unserialize nativo de PHP
-        $components = @unserialize($report->components);
-        if (is_array($components) && isset($components['customsql']['config']->querysql)) {
-            return $components['customsql']['config']->querysql;
-        }
-        // Intentar base64 + unserialize
-        $decoded = @base64_decode($report->components, true);
-        if ($decoded !== false) {
-            $components = @unserialize($decoded);
-            if (is_array($components) && isset($components['customsql']['config']->querysql)) {
-                return $components['customsql']['config']->querysql;
-            }
-        }
-    }
-    // Intentar con campo 'querysql' directo
-    if (!empty($report->querysql)) {
-        return $report->querysql;
-    }
-    // Intentar con campo 'configdata'
-    if (!empty($report->configdata)) {
-        $config = @json_decode($report->configdata);
-        if ($config && !empty($config->querysql)) {
-            return $config->querysql;
-        }
-        $config = @unserialize($report->configdata);
-        if (is_array($config) && !empty($config['querysql'])) {
-            return $config['querysql'];
-        }
-    }
-    return null;
-}
+console = Console()
 
-/**
- * Ejecuta una consulta SQL de solo lectura y devuelve hasta $maxrows filas.
- */
-function execute_report_sql(string $sql, int $courseid, int $maxrows): array {
-    global $DB;
 
-    // Reemplazar placeholders comunes del plugin
-    $sql = str_replace(['%%COURSEID%%', '%%USERID%%', '%%CATEGORYID%%'], [$courseid, 0, 0], $sql);
+def get_audit_courseids() -> List[str]:
+    """Lee los courseids afectados de auditoria_resultado.json."""
+    if not AUDIT_SNAPSHOT_FILE.exists():
+        console.print("[red]No existe auditoria_resultado.json. Ejecuta primero auditar_cr.py.[/red]")
+        sys.exit(1)
+    snapshot = json.loads(AUDIT_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    courseids = []
+    for server_entry in snapshot.get("servers", []):
+        for cid in server_entry.get("affected_courseids", []):
+            if str(cid) not in courseids:
+                courseids.append(str(cid))
+    if not courseids:
+        console.print("[yellow]La auditoría no detectó cursos afectados.[/yellow]")
+        sys.exit(0)
+    return courseids
 
-    // Seguridad: solo permitir SELECT
-    $trimmed = ltrim($sql);
-    if (!preg_match('/^\s*SELECT\b/i', $trimmed)) {
-        return ['error' => 'No es una consulta SELECT', 'rows' => [], 'columns' => []];
-    }
 
-    try {
-        $rs = $DB->get_recordset_sql($sql, [], 0, $maxrows);
-        $rows = [];
-        $columns = [];
-        foreach ($rs as $record) {
-            $row = (array) $record;
-            if (empty($columns)) {
-                $columns = array_keys($row);
-            }
-            $rows[] = $row;
-        }
-        $rs->close();
-        return ['error' => null, 'rows' => $rows, 'columns' => $columns, 'row_count' => count($rows)];
-    } catch (Throwable $e) {
-        return ['error' => $e->getMessage(), 'rows' => [], 'columns' => []];
-    }
-}
+def run_comparison_batch(ssh, remote_php: str, config_path: str, web_user: str,
+                         courseids: List[str], sudo_password) -> Dict[str, Any]:
+    """Ejecuta el PHP para un lote de cursos y devuelve el resultado."""
+    courses_arg = ",".join(courseids)
+    command = (
+        f"sudo -u {q(web_user)} env HOME=/tmp php {q(remote_php)} "
+        f"--config={q(config_path)} --courses={q(courses_arg)}"
+    )
+    logs = []
+    run_log = execute_remote(
+        logs, ssh, step="Comparación componentes", command=command,
+        sudo_password=sudo_password, timeout=1800, fail_on_error=False,
+    )
 
-// ---------------------------------------------------------------------------
-// Detectar tablas del plugin alquilado
-// ---------------------------------------------------------------------------
-$dbman = $DB->get_manager();
-$rentedtable = null;
-$rentedtablename = '';
+    payload = parse_php_output(run_log.stdout)
+    if payload is None:
+        console.print(f"[red]  No se pudo interpretar la salida PHP para cursos {courses_arg[:60]}...[/red]")
+        console.print(f"[dim]  exit={run_log.exit_status}[/dim]")
+        console.print(f"[dim]  stderr={run_log.stderr[:300]}[/dim]")
+        console.print(f"[dim]  stdout={run_log.stdout[:300]}[/dim]")
+        return None
+    return payload
 
-// Probar nombres de tabla comunes para block_advanced_reports
-$candidates = ['block_advanced_reports', 'block_adv_reports', 'block_advreports'];
-foreach ($candidates as $tname) {
-    if ($dbman->table_exists($tname)) {
-        $rentedtablename = $tname;
-        break;
-    }
-}
 
-// Si no encontramos tabla específica, listar todas las tablas que contengan 'advanced' o 'adv_report'
-if (empty($rentedtablename)) {
-    // Buscar en information_schema
-    try {
-        $prefix = $CFG->prefix;
-        $alltables = $DB->get_records_sql(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name LIKE ?",
-            ["{$prefix}%adv%report%"]
-        );
-        if ($alltables) {
-            foreach ($alltables as $t) {
-                $name = str_replace($prefix, '', $t->table_name);
-                $rentedtablename = $name;
-                break; // Tomar la primera
-            }
-        }
-    } catch (Throwable $e) {
-        // Ignorar errores de búsqueda
-    }
-}
+BATCH_SIZE = 15  # Cursos por lote para evitar exceder memoria PHP
 
-// ---------------------------------------------------------------------------
-// Recopilar datos por curso
-// ---------------------------------------------------------------------------
-$output = [];
 
-foreach ($courseids as $courseid) {
-    $course = $DB->get_record('course', ['id' => $courseid], 'id, fullname, shortname');
-    if (!$course) {
-        $output[] = [
-            'courseid' => $courseid,
-            'error' => 'Curso no encontrado',
-        ];
-        continue;
-    }
+def run_comparison(server: Dict[str, Any], courseids: List[str]) -> Dict[str, Any]:
+    """Sube el PHP, lo ejecuta en lotes y fusiona los resultados."""
+    moodle_path = str(server["moodle_path"]).rstrip("/")
+    config_path = posixpath.join(moodle_path, "config.php")
+    web_user = str(server["web_user"])
+    sudo_password = server.get("sudo_password") if server.get("sudo_requires_password") else None
 
-    $coursedata = [
-        'courseid' => $courseid,
-        'fullname' => $course->fullname,
-        'shortname' => $course->shortname,
-        'own_reports' => [],
-        'rented_reports' => [],
-        'rented_table' => $rentedtablename ?: null,
-    ];
+    token = uuid.uuid4().hex
+    remote_php = posixpath.join(REMOTE_TMP_DIR, f"cr_comp_components_{token}.php")
 
-    // --- Reportes del plugin PROPIO ---
-    if ($dbman->table_exists('block_configurable_reports')) {
-        $ownreports = $DB->get_records('block_configurable_reports', ['courseid' => $courseid], 'id ASC');
-        foreach ($ownreports as $rep) {
-            $sql = extract_own_sql($rep);
-            $result = null;
-            if ($sql) {
-                $result = execute_report_sql($sql, $courseid, $maxrows);
-            }
-            $coursedata['own_reports'][] = [
-                'id' => (int) $rep->id,
-                'name' => $rep->name,
-                'type' => $rep->type ?? null,
-                'sql' => $sql,
-                'data' => $result,
-            ];
-        }
-    }
+    ssh = None
+    sftp = None
+    cleanup_errors: List[str] = []
 
-    // --- Reportes del plugin ALQUILADO ---
-    if (!empty($rentedtablename) && $dbman->table_exists($rentedtablename)) {
-        // Primero, ver qué columnas tiene la tabla
-        $columns_info = [];
-        try {
-            $samplerow = $DB->get_records_sql("SELECT * FROM {{$rentedtablename}} LIMIT 1");
-            if ($samplerow) {
-                $columns_info = array_keys((array) reset($samplerow));
-            }
-        } catch (Throwable $e) {
-            $coursedata['rented_table_error'] = $e->getMessage();
-        }
-        $coursedata['rented_table_columns'] = $columns_info;
+    try:
+        conn_label = "localmente" if is_local_mode(server) else "por SSH"
+        console.print(f"[cyan]Conectando {conn_label} a {server['name']}...[/cyan]")
+        ssh = connect_ssh(server)
+        sftp = ssh.open_sftp()
 
-        // Buscar reportes del curso
-        $coursefield = in_array('courseid', $columns_info) ? 'courseid' : null;
-        if (!$coursefield && in_array('course', $columns_info)) {
-            $coursefield = 'course';
+        # Subir PHP
+        sftp.put(str(PHP_COMPARATOR), remote_php)
+        sftp.chmod(remote_php, 0o644)
+
+        # Dividir en lotes
+        batches = [courseids[i:i + BATCH_SIZE] for i in range(0, len(courseids), BATCH_SIZE)]
+        console.print(
+            f"[cyan]Comparando componentes para {len(courseids)} cursos "
+            f"en {len(batches)} lotes de hasta {BATCH_SIZE}...[/cyan]"
+        )
+
+        # Resultado fusionado
+        merged = {
+            "ok": True,
+            "rented_table": None,
+            "summary": {
+                "total_courses": 0,
+                "total_pairs": 0,
+                "identical_pairs": 0,
+                "different_pairs": 0,
+                "own_only": 0,
+                "rented_only": 0,
+                "deserialize_errors": 0,
+            },
+            "courses": [],
         }
 
-        if ($coursefield) {
-            try {
-                $rentedreports = $DB->get_records($rentedtablename, [$coursefield => $courseid], 'id ASC');
-                foreach ($rentedreports as $rep) {
-                    $sql = extract_rented_sql($rep);
-                    $result = null;
-                    if ($sql) {
-                        $result = execute_report_sql($sql, $courseid, $maxrows);
-                    }
+        for idx, batch in enumerate(batches, 1):
+            console.print(f"[cyan]  Lote {idx}/{len(batches)} ({len(batch)} cursos)...[/cyan]")
+            payload = run_comparison_batch(
+                ssh, remote_php, config_path, web_user, batch, sudo_password,
+            )
+            if payload is None:
+                continue
+            if not payload.get("ok"):
+                console.print(f"[red]  Lote {idx} error: {payload.get('fatal', '?')}[/red]")
+                continue
 
-                    $name = $rep->name ?? $rep->title ?? $rep->reportname ?? "id_{$rep->id}";
-                    $type = $rep->type ?? $rep->reporttype ?? null;
+            # Fusionar
+            if payload.get("rented_table"):
+                merged["rented_table"] = payload["rented_table"]
+            for key in merged["summary"]:
+                merged["summary"][key] += payload.get("summary", {}).get(key, 0)
+            merged["courses"].extend(payload.get("courses", []))
 
-                    $coursedata['rented_reports'][] = [
-                        'id' => (int) $rep->id,
-                        'name' => $name,
-                        'type' => $type,
-                        'sql' => $sql,
-                        'data' => $result,
-                        'raw_fields' => array_keys((array) $rep),
-                    ];
-                }
-            } catch (Throwable $e) {
-                $coursedata['rented_query_error'] = $e->getMessage();
-            }
-        } else {
-            $coursedata['rented_note'] = "La tabla {$rentedtablename} no tiene campo courseid/course";
-        }
-    }
+        return merged
 
-    $output[] = $coursedata;
-}
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        return {"error": str(exc)}
+    finally:
+        if ssh is not None:
+            safe_cleanup(ssh, f"rm -f {q(remote_php)}", cleanup_errors, sudo_password=sudo_password)
+        if sftp is not None:
+            try:
+                sftp.close()
+            except Exception:
+                pass
+        if ssh is not None:
+            try:
+                ssh.close()
+            except Exception:
+                pass
 
-cr_emit([
-    'ok' => true,
-    'rented_table_found' => $rentedtablename ?: null,
-    'own_plugin_present' => $hasownplugin,
-    'courses' => $output,
-], 0);
+
+def print_comparison(data: Dict[str, Any]) -> None:
+    """Imprime el comparativo detallado en consola."""
+    if not data.get("ok"):
+        console.print(f"[red]Error: {data.get('fatal', data.get('error', '?'))}[/red]")
+        return
+
+    # Resumen global
+    summary = data.get("summary", {})
+    console.print(Panel(
+        f"Cursos analizados: [bold]{summary.get('total_courses', 0)}[/bold]\n"
+        f"Pares comparados:  [bold]{summary.get('total_pairs', 0)}[/bold]\n"
+        f"Idénticos:         [bold green]{summary.get('identical_pairs', 0)}[/bold green]\n"
+        f"Diferentes:        [bold red]{summary.get('different_pairs', 0)}[/bold red]\n"
+        f"Solo en propio:    [yellow]{summary.get('own_only', 0)}[/yellow]\n"
+        f"Solo en alquilado: [yellow]{summary.get('rented_only', 0)}[/yellow]\n"
+        f"Errores deserial.: [dim]{summary.get('deserialize_errors', 0)}[/dim]",
+        title="[bold cyan]Resumen de comparación de componentes[/bold cyan]",
+        border_style="cyan",
+    ))
+
+    for course in data.get("courses", []):
+        if course.get("error"):
+            console.print(f"\n[red]Curso {course['courseid']}: {course['error']}[/red]")
+            continue
+
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(
+            f"[bold]Curso {course['courseid']}:[/bold] "
+            f"{course.get('fullname', '?')} ({course.get('shortname', '?')})"
+        )
+
+        pairs = course.get("pairs", [])
+        own_only = course.get("own_only", [])
+        rented_only = course.get("rented_only", [])
+
+        if pairs:
+            table = Table(title="Reportes emparejados por nombre")
+            table.add_column("Propio ID", justify="right")
+            table.add_column("Alquilado ID", justify="right")
+            table.add_column("Nombre")
+            table.add_column("Estado")
+            table.add_column("Difs.", justify="right")
+
+            for pair in pairs:
+                if pair.get("identical"):
+                    estado = "[bold green]IDÉNTICO[/bold green]"
+                    difs = "0"
+                elif pair.get("status") == "error_deserializar_propio":
+                    estado = "[red]error propio[/red]"
+                    difs = "—"
+                elif pair.get("status") == "error_deserializar_alquilado":
+                    estado = "[red]error alquilado[/red]"
+                    difs = "—"
+                else:
+                    estado = "[yellow]DIFERENTE[/yellow]"
+                    difs = str(pair.get("diff_count", "?"))
+
+                name_display = pair["own_name"]
+                if pair["own_name"] != pair["rented_name"]:
+                    name_display += f" ↔ {pair['rented_name']}"
+
+                table.add_row(
+                    str(pair["own_id"]), str(pair["rented_id"]),
+                    name_display[:50], estado, difs,
+                )
+            console.print(table)
+
+            # Mostrar detalles de diferencias
+            for pair in pairs:
+                if pair.get("identical") or not pair.get("diffs"):
+                    continue
+
+                console.print(f"\n  [bold yellow]Diferencias en:[/bold yellow] {pair['own_name']}")
+                for diff in pair["diffs"][:15]:  # Limitar a 15 diferencias por reporte
+                    path = diff.get("path", "?")
+                    dtype = diff.get("type", "?")
+
+                    if dtype == "solo_en_propio":
+                        console.print(f"    [green]+ {path}[/green]: {diff.get('own_value', '')}")
+                    elif dtype == "solo_en_alquilado":
+                        console.print(f"    [red]- {path}[/red]: {diff.get('rented_value', '')}")
+                    else:
+                        console.print(
+                            f"    [yellow]~ {path}[/yellow]: "
+                            f"propio=[cyan]{diff.get('own_value', '')}[/cyan] | "
+                            f"alquilado=[magenta]{diff.get('rented_value', '')}[/magenta]"
+                        )
+
+                if len(pair.get("diffs", [])) > 15:
+                    console.print(f"    [dim]... y {len(pair['diffs']) - 15} diferencia(s) más[/dim]")
+
+                # Mostrar diferencias de metadatos
+                if pair.get("meta_diffs"):
+                    for md in pair["meta_diffs"]:
+                        console.print(
+                            f"    [dim]meta.{md['field']}:[/dim] "
+                            f"propio={md['own']} | alquilado={md['rented']}"
+                        )
+
+        if own_only:
+            console.print(f"\n  [yellow]Solo en propio ({len(own_only)}):[/yellow]")
+            for r in own_only:
+                console.print(f"    • {r['name']} (id={r['id']}, tipo={r.get('type', '?')})")
+
+        if rented_only:
+            console.print(f"\n  [yellow]Solo en alquilado ({len(rented_only)}):[/yellow]")
+            for r in rented_only:
+                console.print(f"    • {r['name']} (id={r['id']}, tipo={r.get('type', '?')})")
+
+
+def main() -> None:
+    console.print("[bold cyan]Comparador de componentes · Propio vs. Alquilado[/bold cyan]\n")
+
+    try:
+        servers, settings = load_inventory(INVENTORY_FILE)
+        exec_mode = prompt_execution_mode()
+        apply_execution_mode(servers, exec_mode)
+
+        selected_servers = prompt_server_selection(servers)
+        if not selected_servers:
+            console.print("[yellow]No se seleccionaron plataformas.[/yellow]")
+            return
+
+        courseids = get_audit_courseids()
+        console.print(f"[green]Cursos a comparar (de la auditoría):[/green] {', '.join(courseids)}")
+
+        server = selected_servers[0]
+        result = run_comparison(server, courseids)
+
+        # Guardar resultado completo
+        OUTPUT_FILE.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        console.print(f"\n[green]Resultado guardado en:[/green] {OUTPUT_FILE}")
+
+        # Mostrar comparativo en consola
+        print_comparison(result)
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelado.[/yellow]")
+    except Exception as exc:
+        console.print(f"[bold red]Error fatal: {exc}[/bold red]")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
