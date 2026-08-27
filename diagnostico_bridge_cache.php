@@ -4,7 +4,7 @@
  * Uso: php diagnostico_bridge_cache.php <courseid> [userid]
  */
 define('CLI_SCRIPT', true);
-require(__DIR__ . '/../../config.php');
+require('/var/www/html/moodle/sanase/config.php');
 
 $courseid = isset($argv[1]) ? (int)$argv[1] : 67;
 $userid = isset($argv[2]) ? (int)$argv[2] : 0;
