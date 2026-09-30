@@ -51,11 +51,12 @@ def main():
     console.print(f"[bold cyan]Diagnóstico de correos: userid={userid}, courseid={courseid}[/bold cyan]")
 
     inventory = load_inventory(INVENTORY_FILE)
-    server = prompt_server_selection(inventory)
-    if not server:
+    servers = prompt_server_selection(inventory["servers"])
+    if not servers:
         console.print("[red]No se seleccionó servidor.[/red]")
         return
 
+    server = servers[0]
     moodle_path = str(server["moodle_path"]).rstrip("/")
     config_path = posixpath.join(moodle_path, "config.php")
     web_user = str(server["web_user"])
