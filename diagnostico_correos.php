@@ -35,6 +35,7 @@ $result = [
 ];
 
 // ============================================================
+fwrite(STDERR, "TRACE: starting cache section\n");
 // 1. CACHE iTOP: todos los registros para este usuario/curso
 // ============================================================
 if ($dbman->table_exists('block_adv_reports_values')) {
@@ -56,6 +57,7 @@ if ($dbman->table_exists('block_adv_reports_values')) {
 }
 
 // ============================================================
+fwrite(STDERR, "TRACE: starting roles section\n");
 // 2. Identificar roles del usuario en el curso
 // ============================================================
 try {
@@ -71,6 +73,7 @@ try {
 }
 
 // ============================================================
+fwrite(STDERR, "TRACE: starting staff section\n");
 // 3. Identificar staff del curso (teachers, managers, non-students)
 // ============================================================
 $staffids = [];
@@ -146,6 +149,7 @@ $targetuser = $DB->get_record('user', ['id' => $userid], 'id,firstname,lastname'
 $result['user_name'] = $targetuser ? trim($targetuser->firstname . ' ' . $targetuser->lastname) : '?';
 
 // ============================================================
+fwrite(STDERR, "TRACE: starting counts section\n");
 // 4. CONTEOS DE MENSAJES con distintas metodologías
 // ============================================================
 
@@ -313,6 +317,7 @@ function count_forum_staff_posts(int $courseid, int $excludeuid, array $staffids
     }
 }
 
+fwrite(STDERR, "TRACE: running all counts\n");
 // --- Run all counts ---
 $counts = [];
 
@@ -346,6 +351,7 @@ $counts['teacher_to_student_plus_forum']      = $counts['direct_teacher_to_stude
 $result['counts'] = $counts;
 
 // ============================================================
+fwrite(STDERR, "TRACE: starting messages sample\n");
 // 5. Show actual messages for reference (first 20)
 // ============================================================
 $messages = [];
@@ -388,6 +394,7 @@ if (!empty($teacherids) && $dbman->table_exists('message_messages') && $dbman->t
 $result['messages_sample'] = $messages;
 
 // ============================================================
+fwrite(STDERR, "TRACE: about to output\n");
 // Output
 // ============================================================
 echo "<<<CR_RESULT>>>";
