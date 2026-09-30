@@ -50,8 +50,8 @@ def main():
 
     console.print(f"[bold cyan]Diagnóstico de correos: userid={userid}, courseid={courseid}[/bold cyan]")
 
-    inventory = load_inventory(INVENTORY_FILE)
-    servers = prompt_server_selection(inventory["servers"])
+    servers_list, settings = load_inventory(INVENTORY_FILE)
+    servers = prompt_server_selection(servers_list)
     if not servers:
         console.print("[red]No se seleccionó servidor.[/red]")
         return
