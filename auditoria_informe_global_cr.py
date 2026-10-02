@@ -133,7 +133,7 @@ def main():
 
     try:
         # Upload PHP script via SFTP
-        remote_php = "/tmp/auditoria_informe_global.php"
+        remote_php = f"{moodle_path}/auditoria_informe_global.php"
         print("→ Subiendo script PHP...")
         sftp = ssh.open_sftp()
         sftp.put(PHP_SCRIPT, remote_php)
