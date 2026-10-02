@@ -12,12 +12,13 @@ import os
 import re
 import sys
 import textwrap
+from pathlib import Path
 
 # Add parent dir for cr_common
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cr_common import load_inventory, prompt_server_selection, connect_ssh, run_remote_command
 
-INVENTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventario.json")
+INVENTORY_FILE = Path(os.path.dirname(os.path.abspath(__file__))) / "inventario.json"
 PHP_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auditoria_informe_global.php")
 
 def parse_cr_result(stdout: str):
