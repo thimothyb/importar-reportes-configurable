@@ -58,6 +58,32 @@
       "sudo_requires_password": false,
       "sudo_password": "",
       "report_courseids": []
+    },
+    {
+      "name": "ASPASIA-03 (aulaactiva)",
+      "local": false,
+      "host": "35.180.186.84",
+      "port": 22,
+      "ssh_user": "ubuntu",
+      "moodle_path": "/var/www/html/moodle/aulaactiva",
+      "web_user": "www-data",
+      "web_group": "www-data",
+      "sudo_requires_password": false,
+      "sudo_password": "",
+      "report_courseids": []
+    },
+    {
+      "name": "ASPASIA-01 (institut)",
+      "local": false,
+      "host": "15.236.38.50",
+      "port": 22,
+      "ssh_user": "ubuntu",
+      "moodle_path": "/var/www/html/moodle/institut",
+      "web_user": "www-data",
+      "web_group": "www-data",
+      "sudo_requires_password": false,
+      "sudo_password": "",
+      "report_courseids": []
     }
   ]
 }
