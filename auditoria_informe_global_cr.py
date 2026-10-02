@@ -15,7 +15,7 @@ import textwrap
 
 # Add parent dir for cr_common
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cr_common import load_inventory, prompt_server_selection, ssh_run, scp_upload
+from cr_common import load_inventory, prompt_server_selection, connect_ssh, run_remote_command
 
 INVENTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventario.json")
 PHP_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auditoria_informe_global.php")
@@ -117,64 +117,73 @@ def main():
     except ValueError:
         sample_users = 5
 
-    host = server["host"]
-    port = server.get("port", 22)
-    ssh_user = server.get("ssh_user", "ubuntu")
     moodle_path = server["moodle_path"]
     web_user = server.get("web_user", "www-data")
+    sudo_password = server.get("sudo_password")
 
-    print(f"\n→ Conectando a {server['name']} ({host})...")
+    print(f"\n→ Conectando a {server['name']} ({server['host']})...")
 
-    # Upload PHP script
-    remote_php = "/tmp/auditoria_informe_global.php"
-    print("→ Subiendo script PHP...")
-    scp_upload(host, port, ssh_user, PHP_SCRIPT, remote_php)
-
-    # Execute
-    print(f"→ Ejecutando auditoría ({max_courses} cursos, {sample_users} usuarios/curso)...")
-    print("  (esto puede tardar varios minutos)\n")
-
-    cmd = (
-        f"cd {moodle_path} && "
-        f"sudo -u {web_user} php {remote_php} {max_courses} {sample_users}"
-    )
+    # Connect SSH
+    try:
+        ssh = connect_ssh(server)
+    except Exception as e:
+        print(f"Error conectando SSH: {e}")
+        return
 
     try:
-        exit_code, stdout, stderr = ssh_run(host, port, ssh_user, cmd, timeout=600)
-    except Exception as e:
-        print(f"Error ejecutando SSH: {e}")
-        return
+        # Upload PHP script via SFTP
+        remote_php = "/tmp/auditoria_informe_global.php"
+        print("→ Subiendo script PHP...")
+        sftp = ssh.open_sftp()
+        sftp.put(PHP_SCRIPT, remote_php)
+        sftp.close()
 
-    if stderr:
-        # Show progress lines
-        for line in stderr.strip().split('\n'):
-            if line.strip():
-                print(f"  {line.strip()}")
+        # Execute
+        print(f"→ Ejecutando auditoría ({max_courses} cursos, {sample_users} usuarios/curso)...")
+        print("  (esto puede tardar varios minutos)\n")
 
-    # Parse result
-    data = parse_cr_result(stdout)
-    if data is None:
-        print("\n⚠ No se pudo parsear la salida PHP.")
-        print("STDOUT:", stdout[:2000] if stdout else "(vacío)")
-        return
+        cmd = (
+            f"cd {moodle_path} && "
+            f"sudo -u {web_user} php {remote_php} {max_courses} {sample_users}"
+        )
 
-    if 'error' in data:
-        print(f"\n⚠ Error: {data['error']}")
-        return
+        exit_code, stdout, stderr = run_remote_command(
+            ssh, cmd, sudo_password=sudo_password, timeout=600
+        )
 
-    # Show summary
-    print_summary(data)
+        if stderr:
+            # Show progress lines
+            for line in stderr.strip().split('\n'):
+                if line.strip():
+                    print(f"  {line.strip()}")
 
-    # Save full results
-    outdir = os.path.dirname(os.path.abspath(__file__))
-    outfile = os.path.join(outdir, f"auditoria_{server['name'].replace(' ', '_').replace('(', '').replace(')', '')}.json")
-    with open(outfile, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"  Resultados completos guardados en: {outfile}")
+        # Parse result
+        data = parse_cr_result(stdout)
+        if data is None:
+            print("\n⚠ No se pudo parsear la salida PHP.")
+            print("STDOUT:", stdout[:2000] if stdout else "(vacío)")
+            return
 
-    # Cleanup
-    ssh_run(host, port, ssh_user, f"rm -f {remote_php}", timeout=10)
-    print("  Temporales limpiados.\n")
+        if 'error' in data:
+            print(f"\n⚠ Error: {data['error']}")
+            return
+
+        # Show summary
+        print_summary(data)
+
+        # Save full results
+        outdir = os.path.dirname(os.path.abspath(__file__))
+        outfile = os.path.join(outdir, f"auditoria_{server['name'].replace(' ', '_').replace('(', '').replace(')', '')}.json")
+        with open(outfile, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"  Resultados completos guardados en: {outfile}")
+
+        # Cleanup remote temp
+        run_remote_command(ssh, f"rm -f {remote_php}", timeout=10)
+        print("  Temporales limpiados.\n")
+
+    finally:
+        ssh.close()
 
 
 if __name__ == "__main__":
