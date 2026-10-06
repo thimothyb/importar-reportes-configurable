@@ -101,6 +101,11 @@ function get_plugin_value(int $courseid, int $userid, string $stat_type): string
 function clean_plugin_value(string $raw): string {
     $clean = strip_tags($raw);
     $clean = preg_replace('/\s+/', ' ', $clean);
+    $clean = trim($clean);
+    // Fix doubled button text: "14 Ver díasVer días" → "14 Ver días".
+    $clean = preg_replace('/(Ver (?:días|mensajes))\1/', '$1', $clean);
+    // Also remove trailing "Ver días" / "Ver mensajes" for cleaner comparison.
+    $clean = preg_replace('/\s*Ver (?:días|mensajes)\s*$/', '', $clean);
     return trim($clean);
 }
 
@@ -263,6 +268,10 @@ function verify_nota_final(int $userid, int $courseid): string {
             ORDER BY gi.id ASC";
     $grade = $DB->get_field_sql($sql, ['userid' => $userid, 'courseid' => $courseid], IGNORE_MISSING);
     if ($grade === false || $grade === null || $grade === '') return '0.00';
+    // Use format_float if available (locale-aware, matches plugin output).
+    if (function_exists('format_float')) {
+        return format_float((float)$grade, 2);
+    }
     return number_format((float)$grade, 2);
 }
 
@@ -617,8 +626,9 @@ foreach ($courseids_to_audit as $courseid) {
         $verify_nota = verify_nota_final($userid, $courseid);
 
         // Compare as floats with tolerance.
-        $plugin_grade = (float)$plugin_clean;
-        $verify_grade = (float)$verify_nota;
+        // Plugin may use locale comma (format_float → "8,60"), normalize to period.
+        $plugin_grade = (float)str_replace(',', '.', $plugin_clean);
+        $verify_grade = (float)str_replace(',', '.', $verify_nota);
         $match = (abs($plugin_grade - $verify_grade) < 0.01);
 
         $userresult['comparisons']['nota_final'] = [
