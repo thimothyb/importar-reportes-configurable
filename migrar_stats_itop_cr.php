@@ -383,19 +383,53 @@ function match_columns_by_position(array $own_cols, array $itop_cols): array {
 /**
  * Intenta emparejar un nombre del propio con uno del alquilado.
  */
+/**
+ * Quita el prefijo numérico de un nombre de reporte.
+ * Ej: "001-Informe Global" → "informe global"
+ *     "01 Informe Global"  → "informe global"
+ *     "005-Detalle Evaluaciones" → "detalle evaluaciones"
+ */
+function strip_report_prefix(string $name): string {
+    // Quitar prefijo: dígitos seguidos opcionalmente de - o espacio(s).
+    $stripped = preg_replace('/^\d+[\-\s]+/', '', $name);
+    return strtolower(trim(preg_replace('/\s+/', ' ', $stripped)));
+}
+
 function match_report_name(string $own_name, array $rented_names): ?string {
+    // 1. Coincidencia exacta.
     if (in_array($own_name, $rented_names, true)) return $own_name;
+
+    // 2. Normalizada (lowercase, espacios).
     $own_norm = strtolower(trim(preg_replace('/\s+/', ' ', $own_name)));
     foreach ($rented_names as $rn) {
         $rn_norm = strtolower(trim(preg_replace('/\s+/', ' ', $rn)));
         if ($own_norm === $rn_norm) return $rn;
     }
+
+    // 3. Sin prefijo numérico (001-Informe Global == 01 Informe Global).
+    $own_stripped = strip_report_prefix($own_name);
+    foreach ($rented_names as $rn) {
+        $rn_stripped = strip_report_prefix($rn);
+        if ($own_stripped === $rn_stripped) return $rn;
+    }
+
+    // 4. Coincidencia parcial (uno contiene al otro).
     foreach ($rented_names as $rn) {
         $rn_norm = strtolower(trim(preg_replace('/\s+/', ' ', $rn)));
         if (strpos($own_norm, $rn_norm) !== false || strpos($rn_norm, $own_norm) !== false) {
             return $rn;
         }
     }
+
+    // 5. Parcial sin prefijo.
+    foreach ($rented_names as $rn) {
+        $rn_stripped = strip_report_prefix($rn);
+        if ($own_stripped !== '' && $rn_stripped !== '' &&
+            (strpos($own_stripped, $rn_stripped) !== false || strpos($rn_stripped, $own_stripped) !== false)) {
+            return $rn;
+        }
+    }
+
     return null;
 }
 
