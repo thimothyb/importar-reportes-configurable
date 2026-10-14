@@ -274,22 +274,30 @@ function get_itop_stat_reference($col): array {
         }
     }
 
-    // Resolver instance_id del cmid si es posible.
-    if ($info['cmid'] > 0) {
+    // El ID del formato iTOP (quiz_score_id3577) es el INSTANCE ID
+    // (ej: quiz.id = 3577), NO el course_modules.id (cmid).
+    // Nuestro plugin usa formato modname:cmid:metric, necesitamos el cmid real.
+    if ($info['cmid'] > 0 && $info['module_type'] !== '') {
         global $DB;
+        $instance_id = $info['cmid'];
+        $info['instance_id'] = $instance_id;
+
         try {
-            $cm = $DB->get_record('course_modules', ['id' => $info['cmid']], 'id, instance, module');
-            if ($cm) {
-                $info['instance_id'] = (int) $cm->instance;
-                // Verificar/corregir module_type con la tabla modules.
-                $mod = $DB->get_record('modules', ['id' => $cm->module], 'name');
-                if ($mod) {
-                    $info['module_type'] = $mod->name;
+            $mod = $DB->get_record('modules', ['name' => $info['module_type']], 'id');
+            if ($mod) {
+                $cm = $DB->get_record('course_modules', [
+                    'module' => $mod->id,
+                    'instance' => $instance_id,
+                ], 'id');
+                if ($cm) {
+                    $info['cmid'] = (int) $cm->id;
                     $info['stat'] = $info['module_type'] . ':' . $info['cmid'] . ':' . $info['metric'];
+                } else {
+                    $info['stat'] = $info['module_type'] . ':' . $instance_id . ':' . $info['metric'];
                 }
             }
         } catch (Throwable $e) {
-            // Ignorar.
+            $info['stat'] = $info['module_type'] . ':' . $instance_id . ':' . $info['metric'];
         }
     }
 
