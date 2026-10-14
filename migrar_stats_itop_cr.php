@@ -61,13 +61,13 @@ define('NO_OUTPUT_BUFFERING', true);
 require($cliargs['config']);
 global $CFG, $DB;
 
-// Cargar locallib para cr_unserialize.
+// Cargar locallib para urldecode_recursive/urlencode_recursive.
 $ownlocallib = $CFG->dirroot . '/blocks/configurable_reports/locallib.php';
 if (is_readable($ownlocallib)) {
     require_once($ownlocallib);
 }
-if (!function_exists('cr_unserialize')) {
-    cr_emit(['ok' => false, 'fatal' => 'cr_unserialize no disponible. ¿Está instalado block_configurable_reports?'], 2);
+if (!function_exists('urldecode_recursive')) {
+    cr_emit(['ok' => false, 'fatal' => 'urldecode_recursive no disponible. ¿Está instalado block_configurable_reports?'], 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -148,21 +148,41 @@ if (empty($courseids)) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Decode components preserving exact PHP types (stdClass stays stdClass).
+ * Unlike cr_unserialize, this does NOT do (array) cast on the top level.
+ */
+function raw_deserialize(string $raw) {
+    $raw = preg_replace('/O:6:"object"/', 'O:8:"stdClass"', $raw);
+    $raw = preg_replace('/THEN\+%22(.+?)%22/', 'THEN+%27${1}%27', $raw);
+    $raw = preg_replace('/%60/', '+++', $raw);
+    $data = @unserialize($raw);
+    if ($data === false && $raw !== serialize(false)) {
+        return null;
+    }
+    return urldecode_recursive($data);
+}
+
+/**
+ * Encode components back preserving types (no (array) cast).
+ */
+function raw_serialize($data): string {
+    return serialize(urlencode_recursive($data));
+}
+
+/**
  * Deserializa components de forma segura.
  */
 function safe_deserialize($raw) {
     if (empty($raw)) return null;
-    $result = cr_unserialize($raw);
-    if ($result !== false && $result !== null) return $result;
-    $result = @unserialize($raw);
-    if ($result !== false) return $result;
+    // Use raw_deserialize to preserve exact PHP types (NO (array) cast).
+    $result = raw_deserialize($raw);
+    if ($result !== null) return $result;
+    // Fallback attempts.
     $decoded = @base64_decode($raw, true);
     if ($decoded !== false) {
-        $result = @unserialize($decoded);
-        if ($result !== false) return $result;
+        $result = raw_deserialize($decoded);
+        if ($result !== null) return $result;
     }
-    $result = @json_decode($raw, true);
-    if ($result !== null) return $result;
     return null;
 }
 
@@ -657,11 +677,8 @@ foreach ($courseids as $courseid) {
         if ($report_modified && $applymode) {
             try {
                 // Serializar de vuelta. Usar la misma función que Moodle.
-                if (function_exists('cr_serialize')) {
-                    $new_components = cr_serialize($own_components);
-                } else {
-                    $new_components = base64_encode(serialize($own_components));
-                }
+                // Use raw_serialize to preserve exact PHP types.
+                $new_components = raw_serialize($own_components);
                 $DB->set_field('block_configurable_reports', 'components', $new_components, ['id' => $own_rep->id]);
                 $report_data['db_updated'] = true;
                 $summary['reports_updated_in_db']++;
