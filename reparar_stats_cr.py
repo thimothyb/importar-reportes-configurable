@@ -114,10 +114,9 @@ def show_dry_run_summary(result: dict) -> None:
     reports = result.get("reports", [])
 
     console.print(f"\n[bold cyan]═══ RESUMEN DRY-RUN (Reparación stats) ═══[/bold cyan]")
-    console.print(f"  Tabla iTOP: [yellow]{result.get('rented_table', '?')}[/yellow]")
-    console.print(f"  Reportes procesados: {summary.get('total_reports', 0)}")
-    console.print(f"  [green]Reportes a reparar: {summary.get('reports_repaired', 0)}[/green]")
-    console.print(f"  [dim]Ya correctos: {summary.get('reports_already_ok', 0)}[/dim]")
+    console.print(f"  Reportes procesados: {summary.get('total', 0)}")
+    console.print(f"  [green]Columnas a reparar: {summary.get('columns_fixed', 0)}[/green]")
+    console.print(f"  [dim]Reportes reparados: {summary.get('repaired', 0)}[/dim]")
     console.print(f"  [red]Errores: {summary.get('errors', 0)}[/red]")
 
     for rep in reports:
@@ -125,41 +124,43 @@ def show_dry_run_summary(result: dict) -> None:
             console.print(f"\n  [red]Reporte {rep.get('id', '?')}: {rep['error']}[/red]")
             continue
 
-        action = rep.get("action", "")
-        if action in ("would_repair", "repaired"):
-            console.print(
-                f"\n  [bold]Reporte {rep['id']} — {rep.get('name', '?')}[/bold]"
-            )
+        changes = rep.get("changes", [])
+        if not changes:
+            console.print(f"  Reporte {rep['id']} — {rep.get('name', '?')}: sin cambios")
+            continue
 
+        actionable = [c for c in changes if c.get("action") in ("would_fix", "fixed")]
+        already_ok = [c for c in changes if c.get("action") == "already_correct"]
+
+        console.print(
+            f"\n  [bold]Reporte {rep['id']} — {rep.get('name', '?')} "
+            f"(curso {rep.get('courseid', '?')})[/bold]"
+        )
+
+        if actionable:
             table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
-            table.add_column("Campo", style="cyan")
-            table.add_column("Detalle", style="green")
+            table.add_column("Cabecera", style="cyan")
+            table.add_column("Stat actual", style="red")
+            table.add_column("Nuevo stat", style="green")
+            table.add_column("iTOP raw", style="dim")
+            for c in actionable:
+                table.add_row(
+                    c.get("header", "?"),
+                    c.get("stat_before", "?"),
+                    c.get("stat_after", "?"),
+                    c.get("itop_raw", ""),
+                )
+            console.print(table)
 
-            columns = rep.get("columns_detail", [])
-            for col in columns:
-                stat = col.get("stat", "")
-                header = col.get("header", "?")
-                status = col.get("status", "")
-                if status == "migrated":
-                    table.add_row(header, f"[green]{stat}[/green] (migrado de iTOP)")
-                elif status == "preserved":
-                    table.add_row(header, f"[dim]{stat}[/dim] (preservado)")
-                elif status == "error":
-                    table.add_row(header, f"[red]ERROR: {col.get('error', '?')}[/red]")
-
-            if columns:
-                console.print(table)
-
-            console.print(f"  Acción: [yellow]{action}[/yellow]")
-        elif action == "already_ok":
-            console.print(f"  Reporte {rep['id']} — {rep.get('name', '?')}: [green]ya correcto[/green]")
+        if already_ok:
+            console.print(f"    [dim]Ya correctas: {len(already_ok)} columnas[/dim]")
 
 
 def show_apply_summary(result: dict) -> None:
     summary = result.get("summary", {})
     console.print(f"\n[bold green]═══ REPORTES REPARADOS ═══[/bold green]")
-    console.print(f"  Reportes reparados: {summary.get('reports_repaired', 0)}")
-    console.print(f"  Ya correctos: {summary.get('reports_already_ok', 0)}")
+    console.print(f"  Reportes reparados: {summary.get('repaired', 0)}")
+    console.print(f"  Columnas corregidas: {summary.get('columns_fixed', 0)}")
     console.print(f"  Errores: {summary.get('errors', 0)}")
 
 
@@ -221,13 +222,14 @@ def main():
 
             show_dry_run_summary(dry_result)
 
-            total_repairs = dry_result.get("summary", {}).get("reports_repaired", 0)
-            if total_repairs == 0:
-                console.print("\n  [green]No hay reportes que reparar.[/green]")
+            # Check if there are columns to fix.
+            total_fixes = dry_result.get("summary", {}).get("columns_fixed", 0)
+            if total_fixes == 0:
+                console.print("\n  [green]No hay columnas que reparar.[/green]")
                 continue
 
             if safe_confirm(
-                f"\n¿Aplicar reparación de {total_repairs} reporte(s) en {server['name']}?",
+                f"\n¿Aplicar reparación de {total_fixes} columna(s) en {server['name']}?",
                 default=False,
             ):
                 console.print("  Aplicando reparación...")
