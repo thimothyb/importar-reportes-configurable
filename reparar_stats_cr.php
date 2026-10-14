@@ -209,7 +209,45 @@ function parse_itop_stat(string $raw_stat, int $courseid): array {
 
 // ========== MAIN ==========
 $output = [];
-$summary = ['total' => 0, 'repaired' => 0, 'errors' => 0, 'columns_fixed' => 0];
+$summary = ['total' => 0, 'repaired' => 0, 'errors' => 0, 'columns_fixed' => 0, 'format_fixed' => 0];
+
+/**
+ * Recursively convert arrays back to stdClass where the original format used objects.
+ * The components structure uses stdClass for sections (columns, conditions, etc.)
+ * and arrays only for 'elements' lists.
+ */
+function array_to_object_recursive($data, int $depth = 0) {
+    if ($depth > 20) return $data; // safety
+    if (is_array($data)) {
+        // Check if this is an associative array (should be stdClass) or a list (should stay array).
+        // Lists have sequential integer keys starting from 0.
+        $is_list = array_keys($data) === range(0, count($data) - 1);
+        if ($is_list && count($data) > 0) {
+            // This is a list (like elements array) — keep as array, recurse into items.
+            $result = [];
+            foreach ($data as $item) {
+                $result[] = array_to_object_recursive($item, $depth + 1);
+            }
+            return $result;
+        } else if (!empty($data)) {
+            // Associative array — convert to stdClass.
+            $obj = new \stdClass();
+            foreach ($data as $k => $v) {
+                $obj->$k = array_to_object_recursive($v, $depth + 1);
+            }
+            return $obj;
+        }
+        return $data;
+    }
+    if (is_object($data)) {
+        // Already stdClass — recurse into properties.
+        foreach (get_object_vars($data) as $k => $v) {
+            $data->$k = array_to_object_recursive($v, $depth + 1);
+        }
+        return $data;
+    }
+    return $data;
+}
 
 foreach ($reportids as $rid) {
     $own_rep = $DB->get_record('block_configurable_reports', ['id' => $rid]);
@@ -222,7 +260,7 @@ foreach ($reportids as $rid) {
 
     $courseid = (int)$own_rep->courseid;
 
-    // 1. Read with raw deserialize (preserves types).
+    // 1. Read with raw deserialize (preserves types as stored).
     $components = raw_deserialize($own_rep->components);
     if (!$components) {
         $output[] = ['id' => $rid, 'error' => 'cannot deserialize'];
@@ -230,20 +268,30 @@ foreach ($reportids as $rid) {
         continue;
     }
 
-    // Check if components is array or object at top level.
+    // 2. Detect format corruption: top level should be stdClass, not array.
+    $needs_format_fix = is_array($components);
+    $report_info = [
+        'id' => $rid,
+        'name' => $own_rep->name,
+        'courseid' => $courseid,
+        'top_level_type' => is_object($components) ? 'stdClass' : 'array',
+        'needs_format_fix' => $needs_format_fix,
+        'changes' => [],
+    ];
+
+    // Navigate components regardless of type.
     $is_obj = is_object($components);
     $columns_section = $is_obj ? ($components->columns ?? null) : ($components['columns'] ?? null);
-    if (!$columns_section) {
-        $output[] = ['id' => $rid, 'error' => 'no columns section'];
-        continue;
+    $elements = [];
+    if ($columns_section) {
+        $elements = is_object($columns_section) ? ($columns_section->elements ?? []) : ($columns_section['elements'] ?? []);
     }
-    $elements = is_object($columns_section) ? ($columns_section->elements ?? []) : ($columns_section['elements'] ?? []);
 
-    // Find the corresponding iTOP report.
+    // 3. Try to fix stats if iTOP report available.
+    $stat_modified = false;
     $rented_rep = null;
     if ($rcoursefield) {
         $rented_reports = $DB->get_records($rentedtablename, [$rcoursefield => $courseid], 'id ASC');
-        // Match by name.
         $own_name_norm = strtolower(trim(preg_replace('/^\d+[\-\s]+/', '', $own_rep->name)));
         foreach ($rented_reports as $rr) {
             $rr_name = $rr->name ?? $rr->title ?? '';
@@ -255,112 +303,122 @@ foreach ($reportids as $rid) {
         }
     }
 
-    if (!$rented_rep) {
-        $output[] = ['id' => $rid, 'name' => $own_rep->name, 'error' => 'no matching iTOP report'];
-        $summary['errors']++;
-        continue;
-    }
-
-    // Deserialize iTOP report components.
-    $rented_raw = $rented_rep->components ?? '';
-    $rented_components = raw_deserialize($rented_raw);
-    if (!$rented_components) {
-        // Try base64.
-        $decoded = @base64_decode($rented_raw);
-        if ($decoded) $rented_components = raw_deserialize($decoded);
-    }
-    if (!$rented_components) {
-        $output[] = ['id' => $rid, 'name' => $own_rep->name, 'error' => 'cannot deserialize iTOP'];
-        $summary['errors']++;
-        continue;
-    }
-
-    // Extract iTOP columns (modulestats / scormadvancedgrades).
-    $rc_cols_section = is_object($rented_components) ? ($rented_components->columns ?? null) : ($rented_components['columns'] ?? null);
-    $rc_elements = [];
-    if ($rc_cols_section) {
-        $rc_elements = is_object($rc_cols_section) ? ($rc_cols_section->elements ?? []) : ($rc_cols_section['elements'] ?? []);
-    }
-
-    // Index iTOP columns by header for matching.
-    $itop_by_header = [];
-    foreach ($rc_elements as $rc_el) {
-        $pname = get_pluginname($rc_el);
-        if (!in_array($pname, ['modulestats', 'modstats', 'scormadvancedgrades', 'modulestatsv2'])) continue;
-        $header = get_header_from_column($rc_el);
-        $stat = get_stat_from_column($rc_el);
-        $itop_by_header[strtolower(trim($header))] = ['stat' => $stat, 'header' => $header];
-    }
-
-    $report_info = ['id' => $rid, 'name' => $own_rep->name, 'courseid' => $courseid, 'changes' => []];
-    $modified = false;
-
-    foreach ($elements as $idx => &$el) {
-        $pname = get_pluginname($el);
-        if ($pname !== 'scormadvancedgrades') continue;
-
-        $header = get_header_from_column($el);
-        $current_stat = get_stat_from_column($el);
-        $header_key = strtolower(trim($header));
-
-        if (!isset($itop_by_header[$header_key])) continue;
-
-        $itop_stat_raw = $itop_by_header[$header_key]['stat'];
-        $parsed = parse_itop_stat($itop_stat_raw, $courseid);
-
-        if (empty($parsed['stat'])) continue;
-        if ($current_stat === $parsed['stat']) {
-            $report_info['changes'][] = [
-                'header' => $header,
-                'stat' => $current_stat,
-                'action' => 'already_correct',
-            ];
-            continue;
+    if ($rented_rep && !empty($elements)) {
+        // Deserialize iTOP report.
+        $rented_raw = $rented_rep->components ?? '';
+        $rented_components = raw_deserialize($rented_raw);
+        if (!$rented_components) {
+            $decoded = @base64_decode($rented_raw);
+            if ($decoded) $rented_components = raw_deserialize($decoded);
         }
 
-        $change = [
-            'header' => $header,
-            'stat_before' => $current_stat,
-            'stat_after' => $parsed['stat'],
-            'itop_raw' => $itop_stat_raw,
-        ];
+        if ($rented_components) {
+            $rc_cols_section = is_object($rented_components)
+                ? ($rented_components->columns ?? null)
+                : ($rented_components['columns'] ?? null);
+            $rc_elements = [];
+            if ($rc_cols_section) {
+                $rc_elements = is_object($rc_cols_section)
+                    ? ($rc_cols_section->elements ?? [])
+                    : ($rc_cols_section['elements'] ?? []);
+            }
 
+            $itop_by_header = [];
+            foreach ($rc_elements as $rc_el) {
+                $pname = get_pluginname($rc_el);
+                if (!in_array($pname, ['modulestats', 'modstats', 'scormadvancedgrades', 'modulestatsv2'])) continue;
+                $header = get_header_from_column($rc_el);
+                $stat = get_stat_from_column($rc_el);
+                $itop_by_header[strtolower(trim($header))] = ['stat' => $stat, 'header' => $header];
+            }
+
+            foreach ($elements as $idx => &$el) {
+                $pname = get_pluginname($el);
+                if ($pname !== 'scormadvancedgrades') continue;
+
+                $header = get_header_from_column($el);
+                $current_stat = get_stat_from_column($el);
+                $header_key = strtolower(trim($header));
+
+                if (!isset($itop_by_header[$header_key])) continue;
+
+                $itop_stat_raw = $itop_by_header[$header_key]['stat'];
+                $parsed = parse_itop_stat($itop_stat_raw, $courseid);
+
+                if (empty($parsed['stat'])) continue;
+                if ($current_stat === $parsed['stat']) {
+                    $report_info['changes'][] = [
+                        'header' => $header, 'stat' => $current_stat, 'action' => 'already_correct',
+                    ];
+                    continue;
+                }
+
+                $change = [
+                    'header' => $header,
+                    'stat_before' => $current_stat,
+                    'stat_after' => $parsed['stat'],
+                    'itop_raw' => $itop_stat_raw,
+                ];
+                if ($applymode) {
+                    set_stat_in_column($el, $parsed['stat']);
+                    $stat_modified = true;
+                    $change['action'] = 'fixed';
+                    $summary['columns_fixed']++;
+                } else {
+                    $change['action'] = 'would_fix';
+                    $summary['columns_fixed']++;
+                }
+                $report_info['changes'][] = $change;
+            }
+            unset($el);
+        }
+    }
+
+    // 4. Re-serialize if format is corrupted OR stats were modified.
+    $needs_save = $needs_format_fix || $stat_modified;
+    $report_info['needs_save'] = $needs_save;
+
+    if ($needs_save) {
         if ($applymode) {
-            set_stat_in_column($el, $parsed['stat']);
-            $modified = true;
-            $change['action'] = 'fixed';
-            $summary['columns_fixed']++;
-        } else {
-            $change['action'] = 'would_fix';
-            $summary['columns_fixed']++;
-        }
-        $report_info['changes'][] = $change;
-    }
-    unset($el);
+            // Re-pack elements if stats changed.
+            if ($stat_modified && $columns_section) {
+                if (is_object($columns_section)) {
+                    $columns_section->elements = $elements;
+                } else {
+                    $columns_section['elements'] = $elements;
+                }
+                if ($is_obj) {
+                    $components->columns = $columns_section;
+                } else {
+                    $components['columns'] = $columns_section;
+                }
+            }
 
-    // Re-pack elements back if modified.
-    if ($modified && $applymode) {
-        // Put elements back.
-        if (is_object($columns_section)) {
-            $columns_section->elements = $elements;
-        } else {
-            $columns_section['elements'] = $elements;
-        }
-        if ($is_obj) {
-            $components->columns = $columns_section;
-        } else {
-            $components['columns'] = $columns_section;
-        }
+            // Convert corrupted arrays back to stdClass recursively.
+            if ($needs_format_fix) {
+                $components = array_to_object_recursive($components);
+                $summary['format_fixed']++;
+                $report_info['format_restored'] = true;
+            }
 
-        try {
-            $new_raw = raw_serialize($components);
-            $DB->set_field('block_configurable_reports', 'components', $new_raw, ['id' => $rid]);
-            $report_info['db_updated'] = true;
+            try {
+                $new_raw = raw_serialize($components);
+                $DB->set_field('block_configurable_reports', 'components', $new_raw, ['id' => $rid]);
+                $report_info['db_updated'] = true;
+                $summary['repaired']++;
+            } catch (Throwable $e) {
+                $report_info['db_error'] = $e->getMessage();
+                $summary['errors']++;
+            }
+        } else {
+            $report_info['action'] = 'would_repair';
+            if ($needs_format_fix) {
+                $summary['format_fixed']++;
+            }
             $summary['repaired']++;
-        } catch (Throwable $e) {
-            $report_info['db_error'] = $e->getMessage();
-            $summary['errors']++;
         }
+    } else {
+        $report_info['action'] = 'already_ok';
     }
 
     $output[] = $report_info;

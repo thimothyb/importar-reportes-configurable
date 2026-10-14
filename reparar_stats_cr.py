@@ -116,6 +116,7 @@ def show_dry_run_summary(result: dict) -> None:
     console.print(f"\n[bold cyan]═══ RESUMEN DRY-RUN (Reparación stats) ═══[/bold cyan]")
     console.print(f"  Reportes procesados: {summary.get('total', 0)}")
     console.print(f"  [green]Columnas a reparar: {summary.get('columns_fixed', 0)}[/green]")
+    console.print(f"  [yellow]Formato corrupto a reparar: {summary.get('format_fixed', 0)}[/yellow]")
     console.print(f"  [dim]Reportes reparados: {summary.get('repaired', 0)}[/dim]")
     console.print(f"  [red]Errores: {summary.get('errors', 0)}[/red]")
 
