@@ -223,14 +223,23 @@ def main():
 
             show_dry_run_summary(dry_result)
 
-            # Check if there are columns to fix.
-            total_fixes = dry_result.get("summary", {}).get("columns_fixed", 0)
+            # Check if there are columns or format issues to fix.
+            cols_fix = dry_result.get("summary", {}).get("columns_fixed", 0)
+            fmt_fix = dry_result.get("summary", {}).get("format_fixed", 0)
+            total_fixes = cols_fix + fmt_fix
             if total_fixes == 0:
-                console.print("\n  [green]No hay columnas que reparar.[/green]")
+                console.print("\n  [green]No hay reportes que reparar.[/green]")
                 continue
 
+            desc_parts = []
+            if cols_fix:
+                desc_parts.append(f"{cols_fix} columna(s)")
+            if fmt_fix:
+                desc_parts.append(f"{fmt_fix} formato(s) corrupto(s)")
+            desc = ' y '.join(desc_parts)
+
             if safe_confirm(
-                f"\n¿Aplicar reparación de {total_fixes} columna(s) en {server['name']}?",
+                f"\n¿Aplicar reparación de {desc} en {server['name']}?",
                 default=False,
             ):
                 console.print("  Aplicando reparación...")
