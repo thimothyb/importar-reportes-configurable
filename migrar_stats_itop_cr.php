@@ -170,6 +170,26 @@ function raw_serialize($data): string {
 }
 
 /**
+ * Normalize component structure: sections and elements as arrays, formdata as stdClass.
+ */
+function normalize_components($data) {
+    $data = (array) $data;
+    $sections = ['columns', 'conditions', 'permissions', 'filters', 'ordering', 'calcs', 'plot', 'customsql'];
+    foreach ($sections as $sec) {
+        if (!isset($data[$sec])) continue;
+        $data[$sec] = (array) $data[$sec];
+        if (isset($data[$sec]['elements'])) {
+            $data[$sec]['elements'] = array_values((array) $data[$sec]['elements']);
+            foreach ($data[$sec]['elements'] as $i => $el) {
+                $data[$sec]['elements'][$i] = (array) $el;
+            }
+        }
+    }
+    return $data;
+}
+
+
+/**
  * Deserializa components de forma segura.
  */
 function safe_deserialize($raw) {
@@ -498,22 +518,11 @@ function update_column_stat(&$components, int $col_index, string $new_stat): boo
     } else {
         $el = $fd;
     }
-    $elements[$col_index] = (object) $el;
+    $elements[$col_index] = $el;
 
-    $cols['elements'] = $elements;
-    if (is_object($comp[$cols_key])) {
-        $comp[$cols_key] = (object) $cols;
-    } else {
-        $comp[$cols_key] = $cols;
-    }
-
-    if (is_object($components)) {
-        foreach ($comp as $k => $v) {
-            $components->$k = $v;
-        }
-    } else {
-        $components = $comp;
-    }
+    $cols['elements'] = array_values($elements);
+    $comp[$cols_key] = $cols;
+    $components = $comp;
     return true;
 }
 
@@ -678,6 +687,7 @@ foreach ($courseids as $courseid) {
             try {
                 // Serializar de vuelta. Usar la misma función que Moodle.
                 // Use raw_serialize to preserve exact PHP types.
+                $own_components = normalize_components($own_components);
                 $new_components = raw_serialize($own_components);
                 $DB->set_field('block_configurable_reports', 'components', $new_components, ['id' => $own_rep->id]);
                 $report_data['db_updated'] = true;
