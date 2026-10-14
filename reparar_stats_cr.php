@@ -212,39 +212,31 @@ $output = [];
 $summary = ['total' => 0, 'repaired' => 0, 'errors' => 0, 'columns_fixed' => 0, 'format_fixed' => 0];
 
 /**
- * Recursively convert arrays back to stdClass where the original format used objects.
- * The components structure uses stdClass for sections (columns, conditions, etc.)
- * and arrays only for 'elements' lists.
+ * Normalize components to the format the plugin expects after cr_unserialize:
+ *   - Top level: array
+ *   - Sections (columns, conditions, etc.): array
+ *   - Element lists: sequential array
+ *   - Individual elements: array
+ *   - formdata and config: stdClass (preserved as-is)
+ *
+ * cr_unserialize only casts the top level, so sections and elements must be
+ * stored as arrays (a:...) not stdClass (O:8:"stdClass":...).
+ * But formdata must stay as stdClass because plugin code uses $el['formdata']->column.
  */
-function array_to_object_recursive($data, int $depth = 0) {
-    if ($depth > 20) return $data; // safety
-    if (is_array($data)) {
-        // Check if this is an associative array (should be stdClass) or a list (should stay array).
-        // Lists have sequential integer keys starting from 0.
-        $is_list = array_keys($data) === range(0, count($data) - 1);
-        if ($is_list && count($data) > 0) {
-            // This is a list (like elements array) — keep as array, recurse into items.
-            $result = [];
-            foreach ($data as $item) {
-                $result[] = array_to_object_recursive($item, $depth + 1);
+function normalize_components($data) {
+    $data = (array) $data; // top level -> array
+    $sections = ['columns', 'conditions', 'permissions', 'filters', 'ordering', 'calcs', 'plot', 'customsql'];
+    foreach ($sections as $sec) {
+        if (!isset($data[$sec])) continue;
+        $data[$sec] = (array) $data[$sec]; // section -> array
+        if (isset($data[$sec]['elements'])) {
+            $data[$sec]['elements'] = array_values((array) $data[$sec]['elements']); // elements list -> sequential array
+            foreach ($data[$sec]['elements'] as $i => $el) {
+                $data[$sec]['elements'][$i] = (array) $el; // individual element -> array
+                // formdata stays as-is (stdClass or whatever it is)
             }
-            return $result;
-        } else if (!empty($data)) {
-            // Associative array — convert to stdClass.
-            $obj = new \stdClass();
-            foreach ($data as $k => $v) {
-                $obj->$k = array_to_object_recursive($v, $depth + 1);
-            }
-            return $obj;
         }
-        return $data;
-    }
-    if (is_object($data)) {
-        // Already stdClass — recurse into properties.
-        foreach (get_object_vars($data) as $k => $v) {
-            $data->$k = array_to_object_recursive($v, $depth + 1);
-        }
-        return $data;
+        // config stays as-is (usually stdClass or null)
     }
     return $data;
 }
@@ -268,8 +260,39 @@ foreach ($reportids as $rid) {
         continue;
     }
 
-    // 2. Detect format corruption: top level should be stdClass, not array.
-    $needs_format_fix = is_array($components);
+    // 2. Detect format corruption: nested sections must be arrays, not stdClass.
+    // The plugin accesses $components['columns']['elements'] etc. with array syntax.
+    // cr_unserialize only casts the top level, so inner sections must be stored as arrays.
+    $needs_format_fix = false;
+    // Check if any section is stdClass (should be array).
+    $check_sections = ['columns', 'conditions', 'permissions', 'filters', 'ordering', 'calcs', 'customsql'];
+    foreach ($check_sections as $sec) {
+        $val = is_object($components) ? ($components->$sec ?? null) : ($components[$sec] ?? null);
+        if ($val !== null && is_object($val)) {
+            $needs_format_fix = true;
+            break;
+        }
+    }
+    // Also check individual elements: if they are stdClass, they need to be arrays.
+    if (!$needs_format_fix) {
+        $cols_sec = is_object($components) ? ($components->columns ?? null) : ($components['columns'] ?? null);
+        if ($cols_sec !== null) {
+            $els = is_object($cols_sec) ? ($cols_sec->elements ?? null) : ($cols_sec['elements'] ?? null);
+            if ($els !== null) {
+                // Check first element: should be array, not stdClass.
+                $first = null;
+                if (is_array($els) && !empty($els)) {
+                    $first = reset($els);
+                } else if (is_object($els)) {
+                    $vars = get_object_vars($els);
+                    $first = !empty($vars) ? reset($vars) : null;
+                }
+                if ($first !== null && is_object($first)) {
+                    $needs_format_fix = true;
+                }
+            }
+        }
+    }
     $report_info = [
         'id' => $rid,
         'name' => $own_rep->name,
@@ -394,9 +417,9 @@ foreach ($reportids as $rid) {
                 }
             }
 
-            // Convert corrupted arrays back to stdClass recursively.
+            // Normalize format: sections and elements as arrays, formdata as stdClass.
             if ($needs_format_fix) {
-                $components = array_to_object_recursive($components);
+                $components = normalize_components($components);
                 $summary['format_fixed']++;
                 $report_info['format_restored'] = true;
             }
