@@ -242,22 +242,25 @@ function summarize_value($val): string {
  * Intenta emparejar un nombre del propio con uno del alquilado.
  * Primero intenta coincidencia exacta, luego parcial.
  */
+function strip_report_prefix(string $name): string {
+    $stripped = preg_replace('/^\\d+[\\-\\s]+/', '', $name);
+    return strtolower(trim(preg_replace('/\\s+/', ' ', $stripped)));
+}
+
 function match_report_name(string $own_name, array $rented_names): ?string {
-    // Exacta
-    if (in_array($own_name, $rented_names, true)) {
-        return $own_name;
-    }
-    // Normalizada (sin espacios extra, lowercase)
-    $own_norm = strtolower(trim(preg_replace('/\s+/', ' ', $own_name)));
+    if (in_array($own_name, $rented_names, true)) return $own_name;
+    $own_norm = strtolower(trim(preg_replace('/\\s+/', ' ', $own_name)));
     foreach ($rented_names as $rn) {
-        $rn_norm = strtolower(trim(preg_replace('/\s+/', ' ', $rn)));
-        if ($own_norm === $rn_norm) {
-            return $rn;
-        }
+        $rn_norm = strtolower(trim(preg_replace('/\\s+/', ' ', $rn)));
+        if ($own_norm === $rn_norm) return $rn;
     }
-    // Coincidencia parcial: el nombre propio contiene al alquilado o viceversa
+    $own_stripped = strip_report_prefix($own_name);
     foreach ($rented_names as $rn) {
-        $rn_norm = strtolower(trim(preg_replace('/\s+/', ' ', $rn)));
+        $rn_stripped = strip_report_prefix($rn);
+        if ($own_stripped === $rn_stripped) return $rn;
+    }
+    foreach ($rented_names as $rn) {
+        $rn_norm = strtolower(trim(preg_replace('/\\s+/', ' ', $rn)));
         if (strpos($own_norm, $rn_norm) !== false || strpos($rn_norm, $own_norm) !== false) {
             return $rn;
         }
