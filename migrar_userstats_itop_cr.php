@@ -451,40 +451,67 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
 }
 
 function update_column_selections(&$components, int $col_index, array $new_cmids, string $target_field): bool {
-    $comp = is_object($components) ? (array) $components : $components;
-    $cols_key = isset($comp['columns']) ? 'columns' : (isset($comp['Columns']) ? 'Columns' : null);
+    // Determinar key de columnas sin cambiar tipos.
+    $cols_key = null;
+    if (is_object($components)) {
+        if (isset($components->columns)) $cols_key = 'columns';
+        elseif (isset($components->Columns)) $cols_key = 'Columns';
+    } else {
+        if (isset($components['columns'])) $cols_key = 'columns';
+        elseif (isset($components['Columns'])) $cols_key = 'Columns';
+    }
     if (!$cols_key) return false;
 
-    $cols = is_object($comp[$cols_key]) ? (array) $comp[$cols_key] : $comp[$cols_key];
-    $elements = $cols['elements'] ?? [];
-    if (is_object($elements)) $elements = (array) $elements;
+    // Acceder a cols preservando tipo.
+    $cols = is_object($components) ? $components->$cols_key : $components[$cols_key];
+
+    // Acceder a elements.
+    $elements_is_obj = false;
+    if (is_object($cols)) {
+        $elements = $cols->elements ?? null;
+    } else {
+        $elements = $cols['elements'] ?? null;
+    }
+    if ($elements === null) return false;
+    if (is_object($elements)) {
+        $elements = (array) $elements;
+        $elements_is_obj = true;
+    }
     if (!isset($elements[$col_index])) return false;
 
-    $el = is_object($elements[$col_index]) ? (array) $elements[$col_index] : $elements[$col_index];
-    $fd = $el['formdata'] ?? $el;
-    $fd = is_object($fd) ? (array) $fd : $fd;
+    // Acceder al elemento y su formdata.
+    $el = $elements[$col_index];
+    $has_formdata = is_object($el) ? isset($el->formdata) : isset($el['formdata']);
 
-    $fd[$target_field] = $new_cmids;
-
-    if (isset($el['formdata'])) {
-        $el['formdata'] = (object) $fd;
+    if ($has_formdata) {
+        $fd = is_object($el) ? $el->formdata : $el['formdata'];
+        if (is_object($fd)) {
+            $fd->$target_field = $new_cmids;
+        } else {
+            $fd[$target_field] = $new_cmids;
+            if (is_object($el)) $el->formdata = $fd;
+            else $el['formdata'] = $fd;
+        }
     } else {
-        $el = $fd;
-    }
-    $elements[$col_index] = (object) $el;
-    $cols['elements'] = $elements;
-
-    if (is_object($comp[$cols_key])) {
-        $comp[$cols_key] = (object) $cols;
-    } else {
-        $comp[$cols_key] = $cols;
+        if (is_object($el)) {
+            $el->$target_field = $new_cmids;
+        } else {
+            $el[$target_field] = $new_cmids;
+        }
     }
 
-    if (is_object($components)) {
-        foreach ($comp as $k => $v) $components->$k = $v;
+    // Escribir de vuelta sin cambiar tipos.
+    $elements[$col_index] = $el;
+    if ($elements_is_obj) $elements = (object) $elements;
+
+    if (is_object($cols)) {
+        $cols->elements = $elements;
     } else {
-        $components = $comp;
+        $cols['elements'] = $elements;
+        if (is_object($components)) $components->$cols_key = $cols;
+        else $components[$cols_key] = $cols;
     }
+
     return true;
 }
 
