@@ -618,10 +618,17 @@ foreach ($courseids as $courseid) {
             sort($existing_cmids);
 
             if ($existing_cmids === $conversion['cmids']) {
-                $col_migration['action'] = 'already_match';
-                $summary['columns_already_match']++;
-                $report_data['column_migrations'][] = $col_migration;
-                continue;
+                // cmids coinciden, pero verificar si falta selectedcmids (CSV para el popup UI)
+                $has_selectedcmids = !empty($own_fd['selectedcmids'] ?? '');
+
+                if ($has_selectedcmids) {
+                    $col_migration['action'] = 'already_match';
+                    $summary['columns_already_match']++;
+                    $report_data['column_migrations'][] = $col_migration;
+                    continue;
+                }
+                // Falta selectedcmids — caer al flujo de migración para escribirlo
+                $col_migration['action_note'] = 'cmids_match_but_missing_selectedcmids';
             }
 
             // Determinar campo target.
