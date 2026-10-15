@@ -407,21 +407,67 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid,
                 $all_cmids = array_merge($all_cmids, $valid_in_course);
                 $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values, 'valid' => $valid_in_course];
             } else {
-                // Cross-course fallback: ids are from another course (template).
-                // Use stat_type to find equivalent activities in current course.
+                // Cross-course fallback: ids son de otro curso (template).
+                // Mapear por posición ordinal: averiguar qué posiciones estaban
+                // seleccionadas en el curso origen y seleccionar las mismas en el actual.
                 $fallback_module = STAT_MODULE_MAP[$stat_type] ?? null;
                 if ($fallback_module !== null) {
                     $mod = $DB->get_record('modules', ['name' => $fallback_module], 'id');
                     if ($mod) {
-                        $cms = $DB->get_records('course_modules', ['course' => $courseid, 'module' => $mod->id], 'id ASC', 'id');
-                        $fallback_cmids = array_map('intval', array_keys($cms));
+                        // Determinar el curso origen de los cmids
+                        $source_courseid = 0;
+                        foreach ($values as $v) {
+                            $src_cm = $DB->get_record('course_modules', ['id' => $v], 'course');
+                            if ($src_cm) { $source_courseid = (int)$src_cm->course; break; }
+                        }
+
+                        // Todos los cmids del mismo módulo en el curso ORIGEN, ordenados
+                        $source_all = [];
+                        if ($source_courseid > 0) {
+                            $src_cms = $DB->get_records('course_modules', [
+                                'course' => $source_courseid, 'module' => $mod->id
+                            ], 'section ASC, id ASC', 'id');
+                            $source_all = array_map('intval', array_keys($src_cms));
+                        }
+
+                        // Posiciones ordinales seleccionadas (0-based)
+                        $selected_positions = [];
+                        foreach ($values as $v) {
+                            $pos = array_search((int)$v, $source_all);
+                            if ($pos !== false) $selected_positions[] = $pos;
+                        }
+
+                        // Todos los cmids del mismo módulo en el curso DESTINO, ordenados
+                        $dest_cms = $DB->get_records('course_modules', [
+                            'course' => $courseid, 'module' => $mod->id
+                        ], 'section ASC, id ASC', 'id');
+                        $dest_all = array_map('intval', array_keys($dest_cms));
+
+                        // Mapear posiciones al curso destino
+                        $fallback_cmids = [];
+                        if (!empty($selected_positions)) {
+                            foreach ($selected_positions as $pos) {
+                                if (isset($dest_all[$pos])) {
+                                    $fallback_cmids[] = $dest_all[$pos];
+                                }
+                            }
+                        }
+                        // Si no se pudo mapear posiciones (no existe en origen), tomar todas
+                        if (empty($fallback_cmids) && empty($selected_positions)) {
+                            $fallback_cmids = $dest_all;
+                        }
+
                         $all_cmids = array_merge($all_cmids, $fallback_cmids);
-                        $details[] = ['field' => $field, 'note' => 'cross-course fallback',
+                        $details[] = ['field' => $field, 'note' => 'cross-course ordinal map',
                                       'input' => $values, 'fallback_module' => $fallback_module,
+                                      'source_course' => $source_courseid,
+                                      'source_all_count' => count($source_all),
+                                      'selected_positions' => $selected_positions,
+                                      'dest_all_count' => count($dest_all),
                                       'fallback_cmids' => $fallback_cmids];
                     }
                 } else if ($stat_type === 'course_modules_completed' || empty($fallback_module)) {
-                    // Generic: try to find original cmids' module types and map
+                    // Generic: no module map available
                     $details[] = ['field' => $field, 'note' => 'cross-course no module map', 'input' => $values, 'stat_type' => $stat_type];
                 }
             }
