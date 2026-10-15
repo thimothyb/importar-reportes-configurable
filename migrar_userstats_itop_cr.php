@@ -73,8 +73,8 @@ $ownlocallib = $CFG->dirroot . '/blocks/configurable_reports/locallib.php';
 if (is_readable($ownlocallib)) {
     require_once($ownlocallib);
 }
-if (!function_exists('cr_unserialize')) {
-    cr_emit(['ok' => false, 'fatal' => 'cr_unserialize no disponible'], 2);
+if (!function_exists('urldecode_recursive')) {
+    cr_emit(['ok' => false, 'fatal' => 'urldecode_recursive no disponible. ¿Está instalado block_configurable_reports?'], 2);
 }
 
 // Detectar tabla iTOP.
@@ -139,18 +139,45 @@ if (empty($rcoursefield)) {
 
 // --- Funciones auxiliares ---
 
+function raw_deserialize(string $raw) {
+    $raw = preg_replace('/O:6:"object"/', 'O:8:"stdClass"', $raw);
+    $raw = preg_replace('/THEN\+%22(.+?)%22/', 'THEN+%27${1}%27', $raw);
+    $raw = preg_replace('/%60/', '+++', $raw);
+    $data = @unserialize($raw);
+    if ($data === false && $raw !== serialize(false)) return null;
+    return urldecode_recursive($data);
+}
+
+function raw_serialize($data): string {
+    return serialize(urlencode_recursive($data));
+}
+
+function normalize_components($data) {
+    $data = (array) $data;
+    $sections = ['columns', 'conditions', 'permissions', 'filters', 'ordering', 'calcs', 'plot', 'customsql'];
+    foreach ($sections as $sec) {
+        if (!isset($data[$sec])) continue;
+        $data[$sec] = (array) $data[$sec];
+        if (isset($data[$sec]['elements'])) {
+            $data[$sec]['elements'] = array_values((array) $data[$sec]['elements']);
+            foreach ($data[$sec]['elements'] as $i => $el) {
+                $data[$sec]['elements'][$i] = (array) $el;
+            }
+        }
+    }
+    return $data;
+}
+
 function safe_deserialize($raw) {
     if (empty($raw)) return null;
-    $result = cr_unserialize($raw);
-    if ($result !== false && $result !== null) return $result;
-    $result = @unserialize($raw);
-    if ($result !== false) return $result;
+    $result = raw_deserialize($raw);
+    if ($result !== null) return $result;
     $decoded = @base64_decode($raw, true);
     if ($decoded !== false) {
-        $result = @unserialize($decoded);
-        if ($result !== false) return $result;
+        $result = raw_deserialize($decoded);
+        if ($result !== null) return $result;
     }
-    return @json_decode($raw, true);
+    return null;
 }
 
 function deep_to_array($val) {
@@ -397,20 +424,10 @@ function update_column_selections(&$components, int $col_index, array $new_cmids
     } else {
         $el = $fd;
     }
-    $elements[$col_index] = (object) $el;
-    $cols['elements'] = $elements;
-
-    if (is_object($comp[$cols_key])) {
-        $comp[$cols_key] = (object) $cols;
-    } else {
-        $comp[$cols_key] = $cols;
-    }
-
-    if (is_object($components)) {
-        foreach ($comp as $k => $v) $components->$k = $v;
-    } else {
-        $components = $comp;
-    }
+    $elements[$col_index] = $el;
+    $cols['elements'] = array_values($elements);
+    $comp[$cols_key] = $cols;
+    $components = $comp;
     return true;
 }
 
@@ -600,9 +617,8 @@ foreach ($courseids as $courseid) {
         }
         if ($has_migrations && $applymode) {
             try {
-                $new_comp = function_exists('cr_serialize')
-                    ? cr_serialize($own_components)
-                    : base64_encode(serialize($own_components));
+                $own_components = normalize_components($own_components);
+                $new_comp = raw_serialize($own_components);
                 $DB->set_field('block_configurable_reports', 'components', $new_comp, ['id' => $own_rep->id]);
                 $report_data['db_updated'] = true;
                 $summary['reports_updated_in_db']++;
