@@ -254,6 +254,7 @@ function get_formdata(array $col): array {
 
 // Campos de selectores de iTOP que contienen IDs de actividades/items.
 define('ITOP_SELECTOR_FIELDS', [
+    'ids',  // campo principal de iTOP: cmids separados por coma
     'cuestionarios', 'elementos_evaluables', 'scorms', 'secciones',
     'sco', 'tareas', 'actividades_recursos', 'grupo',
     'quizzes', 'quizes', 'quiz',
@@ -377,7 +378,7 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
                 if ($c['found'] && $c['cmid'] > 0) $all_cmids[] = $c['cmid'];
             }
             $details[] = ['field' => $field, 'module_type' => $module_type, 'input' => $values, 'conversions' => $converted];
-        } else if (in_array($field, ['actividades_recursos','activities','resources','activities_resources',
+        } else if (in_array($field, ['ids','actividades_recursos','activities','resources','activities_resources',
                                       'activityids','activity_ids','cmids','moduleids','module_ids'])) {
             foreach ($values as $cid) {
                 if ($DB->record_exists('course_modules', ['id' => $cid, 'course' => $courseid])) {
