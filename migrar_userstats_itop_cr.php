@@ -458,6 +458,8 @@ function update_column_selections(&$components, int $col_index, array $new_cmids
     $fd = is_object($fd) ? (array) $fd : $fd;
 
     $fd[$target_field] = $new_cmids;
+    // El popup select_course_modules.php lee desde selectedcmids (CSV string)
+    $fd["selectedcmids"] = implode(",", array_map("intval", $new_cmids));
 
     if (isset($el['formdata'])) {
         $el['formdata'] = (object) $fd;
