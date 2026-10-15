@@ -227,6 +227,7 @@ function get_formdata(array $col): array {
 
 // Campos de selectores de iTOP que contienen IDs de actividades/items.
 define('ITOP_SELECTOR_FIELDS', [
+    'ids',
     'cuestionarios', 'elementos_evaluables', 'scorms', 'secciones',
     'sco', 'tareas', 'actividades_recursos', 'grupo',
     'quizzes', 'quizes', 'quiz',
@@ -350,14 +351,73 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
                 if ($c['found'] && $c['cmid'] > 0) $all_cmids[] = $c['cmid'];
             }
             $details[] = ['field' => $field, 'module_type' => $module_type, 'input' => $values, 'conversions' => $converted];
-        } else if (in_array($field, ['actividades_recursos','activities','resources','activities_resources',
+        } else if (in_array($field, ['ids','actividades_recursos','activities','resources','activities_resources',
                                       'activityids','activity_ids','cmids','moduleids','module_ids'])) {
+            // Intentar directo en curso actual.
+            $direct_cmids = [];
             foreach ($values as $cid) {
                 if ($DB->record_exists('course_modules', ['id' => $cid, 'course' => $courseid])) {
-                    $all_cmids[] = $cid;
+                    $direct_cmids[] = $cid;
                 }
             }
-            $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values];
+
+            if (!empty($direct_cmids)) {
+                $all_cmids = array_merge($all_cmids, $direct_cmids);
+                $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values, 'matched' => count($direct_cmids)];
+            } else {
+                // Cross-course: los cmids vienen de otro curso (plantilla).
+                // Detectar curso origen.
+                $source_courseid = 0;
+                foreach ($values as $v) {
+                    $src_cm = $DB->get_record('course_modules', ['id' => $v], 'course');
+                    if ($src_cm) { $source_courseid = (int)$src_cm->course; break; }
+                }
+
+                if ($source_courseid > 0 && $source_courseid !== $courseid) {
+                    // TODOS los cmids del curso ORIGEN, ordenados por sección e id.
+                    $src_cms = $DB->get_records('course_modules', [
+                        'course' => $source_courseid
+                    ], 'section ASC, id ASC', 'id');
+                    $source_all = array_map('intval', array_keys($src_cms));
+
+                    // Posiciones ordinales de los cmids seleccionados (0-based).
+                    $selected_positions = [];
+                    foreach ($values as $v) {
+                        $pos = array_search((int)$v, $source_all);
+                        if ($pos !== false) $selected_positions[] = $pos;
+                    }
+
+                    // TODOS los cmids del curso DESTINO, ordenados igual.
+                    $dest_cms = $DB->get_records('course_modules', [
+                        'course' => $courseid
+                    ], 'section ASC, id ASC', 'id');
+                    $dest_all = array_map('intval', array_keys($dest_cms));
+
+                    // Mapear posiciones al curso destino.
+                    $fallback_cmids = [];
+                    foreach ($selected_positions as $pos) {
+                        if (isset($dest_all[$pos])) {
+                            $fallback_cmids[] = $dest_all[$pos];
+                        }
+                    }
+
+                    if (!empty($fallback_cmids)) {
+                        $all_cmids = array_merge($all_cmids, $fallback_cmids);
+                    }
+                    $details[] = [
+                        'field' => $field,
+                        'note' => 'cross-course all-cmids ordinal map',
+                        'input' => $values,
+                        'source_course' => $source_courseid,
+                        'positions' => $selected_positions,
+                        'mapped' => count($fallback_cmids),
+                        'source_total_cms' => count($source_all),
+                        'dest_total_cms' => count($dest_all),
+                    ];
+                } else {
+                    $details[] = ['field' => $field, 'note' => 'cmids not found anywhere', 'input' => $values];
+                }
+            }
         } else if (in_array($field, ['secciones', 'sections'])) {
             foreach ($values as $sn) {
                 $sec = $DB->get_record('course_sections', ['course' => $courseid, 'section' => $sn], 'id, sequence');
