@@ -374,30 +374,46 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
                 }
 
                 if ($source_courseid > 0 && $source_courseid !== $courseid) {
-                    // TODOS los cmids del curso ORIGEN, ordenados por sección e id.
-                    $src_cms = $DB->get_records('course_modules', [
-                        'course' => $source_courseid
-                    ], 'section ASC, id ASC', 'id');
-                    $source_all = array_map('intval', array_keys($src_cms));
-
-                    // Posiciones ordinales de los cmids seleccionados (0-based).
-                    $selected_positions = [];
-                    foreach ($values as $v) {
-                        $pos = array_search((int)$v, $source_all);
-                        if ($pos !== false) $selected_positions[] = $pos;
-                    }
-
-                    // TODOS los cmids del curso DESTINO, ordenados igual.
-                    $dest_cms = $DB->get_records('course_modules', [
-                        'course' => $courseid
-                    ], 'section ASC, id ASC', 'id');
-                    $dest_all = array_map('intval', array_keys($dest_cms));
-
-                    // Mapear posiciones al curso destino.
+                    // Mapeo por tipo de módulo + nombre de actividad.
                     $fallback_cmids = [];
-                    foreach ($selected_positions as $pos) {
-                        if (isset($dest_all[$pos])) {
-                            $fallback_cmids[] = $dest_all[$pos];
+                    $map_detail = [];
+                    foreach ($values as $v) {
+                        $src_cm = $DB->get_record('course_modules', ['id' => (int)$v],
+                                                   'id, module, instance');
+                        if (!$src_cm) {
+                            $map_detail[] = ['src_cmid' => (int)$v, 'status' => 'src_cm_not_found'];
+                            continue;
+                        }
+                        $modname = $DB->get_field('modules', 'name', ['id' => $src_cm->module]);
+                        if (!$modname) {
+                            $map_detail[] = ['src_cmid' => (int)$v, 'status' => 'module_name_not_found'];
+                            continue;
+                        }
+                        $actname = $DB->get_field($modname, 'name', ['id' => $src_cm->instance]);
+                        if (!$actname) {
+                            $map_detail[] = ['src_cmid' => (int)$v, 'status' => 'activity_name_not_found',
+                                             'module' => $modname];
+                            continue;
+                        }
+                        // Buscar actividad equivalente en curso destino.
+                        $sql = "SELECT cm.id
+                                  FROM {course_modules} cm
+                                  JOIN {modules} m ON m.id = cm.module
+                                  JOIN {" . $modname . "} act ON act.id = cm.instance
+                                 WHERE cm.course = ? AND m.name = ? AND act.name = ?
+                              ORDER BY cm.id ASC";
+                        $dest_cms = $DB->get_records_sql($sql,
+                            [$courseid, $modname, $actname]);
+                        if ($dest_cms) {
+                            // Tomar el primer match (normalmente solo hay uno).
+                            $dest_cm = reset($dest_cms);
+                            $fallback_cmids[] = (int)$dest_cm->id;
+                            $map_detail[] = ['src_cmid' => (int)$v, 'status' => 'matched',
+                                             'module' => $modname, 'name' => $actname,
+                                             'dest_cmid' => (int)$dest_cm->id];
+                        } else {
+                            $map_detail[] = ['src_cmid' => (int)$v, 'status' => 'no_match_in_dest',
+                                             'module' => $modname, 'name' => $actname];
                         }
                     }
 
@@ -406,13 +422,11 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
                     }
                     $details[] = [
                         'field' => $field,
-                        'note' => 'cross-course all-cmids ordinal map',
+                        'note' => 'cross-course name-based map',
                         'input' => $values,
                         'source_course' => $source_courseid,
-                        'positions' => $selected_positions,
                         'mapped' => count($fallback_cmids),
-                        'source_total_cms' => count($source_all),
-                        'dest_total_cms' => count($dest_all),
+                        'map_detail' => $map_detail,
                     ];
                 } else {
                     $details[] = ['field' => $field, 'note' => 'cmids not found anywhere', 'input' => $values];
