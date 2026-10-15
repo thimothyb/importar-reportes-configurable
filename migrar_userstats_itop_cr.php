@@ -306,7 +306,7 @@ function extract_itop_selected_items(array $formdata): array {
             if (is_array($unserialized)) {
                 $ids = array_filter(array_map('intval', $unserialized));
             } else {
-                $ids = array_filter(array_map('intval', explode(',', $val)));
+                $ids = array_filter(array_map('intval', explode(',', urldecode($val))));
             }
         } else if (is_numeric($val)) {
             $ids = [(int)$val];
