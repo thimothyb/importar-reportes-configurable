@@ -281,7 +281,7 @@ function extract_itop_selected_items(array $formdata): array {
 }
 
 function extract_own_selected_items(array $formdata): array {
-    $possible = ['actividades', 'activities', 'selected_activities',
+    $possible = ['selectedcmids', 'actividades', 'activities', 'selected_activities',
                  'cmids', 'selecteditems', 'selected_items', 'items',
                  'activityids', 'activity_ids', 'moduleids', 'module_ids',
                  'recursos', 'resources'];
@@ -486,17 +486,17 @@ function update_column_selections(&$components, int $col_index, array $new_cmids
     if ($has_formdata) {
         $fd = is_object($el) ? $el->formdata : $el['formdata'];
         if (is_object($fd)) {
-            $fd->$target_field = $new_cmids;
+            $fd->$target_field = implode(",", $new_cmids);
         } else {
-            $fd[$target_field] = $new_cmids;
+            $fd[$target_field] = implode(",", $new_cmids);
             if (is_object($el)) $el->formdata = $fd;
             else $el['formdata'] = $fd;
         }
     } else {
         if (is_object($el)) {
-            $el->$target_field = $new_cmids;
+            $el->$target_field = implode(",", $new_cmids);
         } else {
-            $el[$target_field] = $new_cmids;
+            $el[$target_field] = implode(",", $new_cmids);
         }
     }
 
@@ -666,10 +666,10 @@ foreach ($courseids as $courseid) {
             }
 
             // Determinar campo target.
-            $target_field = 'actividades';
+            $target_field = 'selectedcmids';
             foreach ($own_selections as $os) { $target_field = $os['field']; break; }
             if (empty($own_selections)) {
-                foreach (['actividades','activities','selected_activities','cmids','items'] as $pf) {
+                foreach (['selectedcmids','actividades','activities','selected_activities','cmids','items'] as $pf) {
                     if (array_key_exists($pf, $own_fd)) { $target_field = $pf; break; }
                 }
             }
