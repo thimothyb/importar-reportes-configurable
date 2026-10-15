@@ -14,7 +14,7 @@ sftp = ssh.open_sftp()
 sftp.put(str(SCRIPT_DIR / "repair_formdata_types.php"), "/tmp/repair_formdata_types.php")
 
 # Build command
-args = "--config={}/config.php --courseid=604 --reportids=10037,10041".format(srv['moodle_path'])
+args = "--config={}/config.php --courseid=604 --reportids=10037,10038,10041".format(srv['moodle_path'])
 if '--apply' in sys.argv:
     args += " --apply"
     print("*** MODE: APPLY ***")
