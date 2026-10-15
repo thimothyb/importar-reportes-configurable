@@ -20,10 +20,19 @@ PHP_SCRIPT = "debug_userstats_formdata.php"
 
 
 def main():
-    inventory = load_inventory()
-    server = prompt_server_selection(inventory)
-    if not server:
+    inv_path = SCRIPT_DIR / "inventario.json"
+    if not inv_path.exists():
+        console.print(f"[red]No se encontró {inv_path}[/red]")
+        sys.exit(1)
+
+    servers, settings = load_inventory(inv_path)
+
+    selected = prompt_server_selection(servers)
+    if not selected:
+        console.print("[yellow]No se seleccionaron servidores.[/yellow]")
         return
+
+    server = selected[0] if isinstance(selected, list) else selected
 
     courseid = safe_text("Course ID a inspeccionar", default="604")
     if not courseid:
