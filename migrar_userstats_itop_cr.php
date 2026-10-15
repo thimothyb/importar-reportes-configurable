@@ -73,8 +73,8 @@ $ownlocallib = $CFG->dirroot . '/blocks/configurable_reports/locallib.php';
 if (is_readable($ownlocallib)) {
     require_once($ownlocallib);
 }
-if (!function_exists('urldecode_recursive')) {
-    cr_emit(['ok' => false, 'fatal' => 'urldecode_recursive no disponible. ¿Está instalado block_configurable_reports?'], 2);
+if (!function_exists('cr_unserialize')) {
+    cr_emit(['ok' => false, 'fatal' => 'cr_unserialize no disponible'], 2);
 }
 
 // Detectar tabla iTOP.
@@ -139,45 +139,18 @@ if (empty($rcoursefield)) {
 
 // --- Funciones auxiliares ---
 
-function raw_deserialize(string $raw) {
-    $raw = preg_replace('/O:6:"object"/', 'O:8:"stdClass"', $raw);
-    $raw = preg_replace('/THEN\+%22(.+?)%22/', 'THEN+%27${1}%27', $raw);
-    $raw = preg_replace('/%60/', '+++', $raw);
-    $data = @unserialize($raw);
-    if ($data === false && $raw !== serialize(false)) return null;
-    return urldecode_recursive($data);
-}
-
-function raw_serialize($data): string {
-    return serialize(urlencode_recursive($data));
-}
-
-function normalize_components($data) {
-    $data = (array) $data;
-    $sections = ['columns', 'conditions', 'permissions', 'filters', 'ordering', 'calcs', 'plot', 'customsql'];
-    foreach ($sections as $sec) {
-        if (!isset($data[$sec])) continue;
-        $data[$sec] = (array) $data[$sec];
-        if (isset($data[$sec]['elements'])) {
-            $data[$sec]['elements'] = array_values((array) $data[$sec]['elements']);
-            foreach ($data[$sec]['elements'] as $i => $el) {
-                $data[$sec]['elements'][$i] = (array) $el;
-            }
-        }
-    }
-    return $data;
-}
-
 function safe_deserialize($raw) {
     if (empty($raw)) return null;
-    $result = raw_deserialize($raw);
-    if ($result !== null) return $result;
+    $result = cr_unserialize($raw);
+    if ($result !== false && $result !== null) return $result;
+    $result = @unserialize($raw);
+    if ($result !== false) return $result;
     $decoded = @base64_decode($raw, true);
     if ($decoded !== false) {
-        $result = raw_deserialize($decoded);
-        if ($result !== null) return $result;
+        $result = @unserialize($decoded);
+        if ($result !== false) return $result;
     }
-    return null;
+    return @json_decode($raw, true);
 }
 
 function deep_to_array($val) {
@@ -254,7 +227,6 @@ function get_formdata(array $col): array {
 
 // Campos de selectores de iTOP que contienen IDs de actividades/items.
 define('ITOP_SELECTOR_FIELDS', [
-    'ids',  // campo principal de iTOP: cmids separados por coma
     'cuestionarios', 'elementos_evaluables', 'scorms', 'secciones',
     'sco', 'tareas', 'actividades_recursos', 'grupo',
     'quizzes', 'quizes', 'quiz',
@@ -274,23 +246,6 @@ define('ITOP_SELECTOR_MODULE_MAP', [
     'scorms' => 'scorm', 'scorm' => 'scorm', 'scorm_packages' => 'scorm',
 ]);
 
-// Mapeo stat type → tipo de módulo Moodle (para fallback cross-course).
-define('STAT_MODULE_MAP', [
-    'quiz_score' => 'quiz',
-    'quiz_completed_vs_total' => 'quiz',
-    'quiz_completed_vs_total_moodle_criteria' => 'quiz',
-    'quiz_average_score' => 'quiz',
-    'quiz_best_score' => 'quiz',
-    'quiz_num_completed' => 'quiz',
-    'assignment_num_completed_vs_total' => 'assign',
-    'assignment_average_score' => 'assign',
-    'assignment_completed' => 'assign',
-    'scorm_score' => 'scorm',
-    'scorm_completed_vs_total' => 'scorm',
-    'scorm_average_score' => 'scorm',
-    'course_modules_completed' => null,  // any module type
-]);
-
 function extract_itop_selected_items(array $formdata): array {
     $found = [];
     foreach (ITOP_SELECTOR_FIELDS as $field) {
@@ -306,7 +261,7 @@ function extract_itop_selected_items(array $formdata): array {
             if (is_array($unserialized)) {
                 $ids = array_filter(array_map('intval', $unserialized));
             } else {
-                $ids = array_filter(array_map('intval', explode(',', urldecode($val))));
+                $ids = array_filter(array_map('intval', explode(',', $val)));
             }
         } else if (is_numeric($val)) {
             $ids = [(int)$val];
@@ -379,7 +334,7 @@ function instance_ids_to_cmids(array $instance_ids, string $module_type, int $co
     return $results;
 }
 
-function convert_itop_selections_to_cmids(array $itop_selections, int $courseid, string $stat_type = ''): array {
+function convert_itop_selections_to_cmids(array $itop_selections, int $courseid): array {
     global $DB;
     $all_cmids = [];
     $details = [];
@@ -395,82 +350,14 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid,
                 if ($c['found'] && $c['cmid'] > 0) $all_cmids[] = $c['cmid'];
             }
             $details[] = ['field' => $field, 'module_type' => $module_type, 'input' => $values, 'conversions' => $converted];
-        } else if (in_array($field, ['ids','actividades_recursos','activities','resources','activities_resources',
+        } else if (in_array($field, ['actividades_recursos','activities','resources','activities_resources',
                                       'activityids','activity_ids','cmids','moduleids','module_ids'])) {
-            $valid_in_course = [];
             foreach ($values as $cid) {
                 if ($DB->record_exists('course_modules', ['id' => $cid, 'course' => $courseid])) {
-                    $valid_in_course[] = $cid;
+                    $all_cmids[] = $cid;
                 }
             }
-            if (!empty($valid_in_course)) {
-                $all_cmids = array_merge($all_cmids, $valid_in_course);
-                $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values, 'valid' => $valid_in_course];
-            } else {
-                // Cross-course fallback: ids son de otro curso (template).
-                // Mapear por posición ordinal: averiguar qué posiciones estaban
-                // seleccionadas en el curso origen y seleccionar las mismas en el actual.
-                $fallback_module = STAT_MODULE_MAP[$stat_type] ?? null;
-                if ($fallback_module !== null) {
-                    $mod = $DB->get_record('modules', ['name' => $fallback_module], 'id');
-                    if ($mod) {
-                        // Determinar el curso origen de los cmids
-                        $source_courseid = 0;
-                        foreach ($values as $v) {
-                            $src_cm = $DB->get_record('course_modules', ['id' => $v], 'course');
-                            if ($src_cm) { $source_courseid = (int)$src_cm->course; break; }
-                        }
-
-                        // Todos los cmids del mismo módulo en el curso ORIGEN, ordenados
-                        $source_all = [];
-                        if ($source_courseid > 0) {
-                            $src_cms = $DB->get_records('course_modules', [
-                                'course' => $source_courseid, 'module' => $mod->id
-                            ], 'section ASC, id ASC', 'id');
-                            $source_all = array_map('intval', array_keys($src_cms));
-                        }
-
-                        // Posiciones ordinales seleccionadas (0-based)
-                        $selected_positions = [];
-                        foreach ($values as $v) {
-                            $pos = array_search((int)$v, $source_all);
-                            if ($pos !== false) $selected_positions[] = $pos;
-                        }
-
-                        // Todos los cmids del mismo módulo en el curso DESTINO, ordenados
-                        $dest_cms = $DB->get_records('course_modules', [
-                            'course' => $courseid, 'module' => $mod->id
-                        ], 'section ASC, id ASC', 'id');
-                        $dest_all = array_map('intval', array_keys($dest_cms));
-
-                        // Mapear posiciones al curso destino
-                        $fallback_cmids = [];
-                        if (!empty($selected_positions)) {
-                            foreach ($selected_positions as $pos) {
-                                if (isset($dest_all[$pos])) {
-                                    $fallback_cmids[] = $dest_all[$pos];
-                                }
-                            }
-                        }
-                        // Si no se pudo mapear posiciones (no existe en origen), tomar todas
-                        if (empty($fallback_cmids) && empty($selected_positions)) {
-                            $fallback_cmids = $dest_all;
-                        }
-
-                        $all_cmids = array_merge($all_cmids, $fallback_cmids);
-                        $details[] = ['field' => $field, 'note' => 'cross-course ordinal map',
-                                      'input' => $values, 'fallback_module' => $fallback_module,
-                                      'source_course' => $source_courseid,
-                                      'source_all_count' => count($source_all),
-                                      'selected_positions' => $selected_positions,
-                                      'dest_all_count' => count($dest_all),
-                                      'fallback_cmids' => $fallback_cmids];
-                    }
-                } else if ($stat_type === 'course_modules_completed' || empty($fallback_module)) {
-                    // Generic: no module map available
-                    $details[] = ['field' => $field, 'note' => 'cross-course no module map', 'input' => $values, 'stat_type' => $stat_type];
-                }
-            }
+            $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values];
         } else if (in_array($field, ['secciones', 'sections'])) {
             foreach ($values as $sn) {
                 $sec = $DB->get_record('course_sections', ['course' => $courseid, 'section' => $sn], 'id, sequence');
@@ -504,18 +391,26 @@ function update_column_selections(&$components, int $col_index, array $new_cmids
     $fd = is_object($fd) ? (array) $fd : $fd;
 
     $fd[$target_field] = $new_cmids;
-    // El popup select_course_modules.php lee desde selectedcmids (CSV string)
-    $fd["selectedcmids"] = implode(",", array_map("intval", $new_cmids));
 
     if (isset($el['formdata'])) {
         $el['formdata'] = (object) $fd;
     } else {
         $el = $fd;
     }
-    $elements[$col_index] = $el;
-    $cols['elements'] = array_values($elements);
-    $comp[$cols_key] = $cols;
-    $components = $comp;
+    $elements[$col_index] = (object) $el;
+    $cols['elements'] = $elements;
+
+    if (is_object($comp[$cols_key])) {
+        $comp[$cols_key] = (object) $cols;
+    } else {
+        $comp[$cols_key] = $cols;
+    }
+
+    if (is_object($components)) {
+        foreach ($comp as $k => $v) $components->$k = $v;
+    } else {
+        $components = $comp;
+    }
     return true;
 }
 
@@ -645,8 +540,7 @@ foreach ($courseids as $courseid) {
 
             $summary['columns_with_itop_selections']++;
 
-            $itop_stat = $itop_fd['stat'] ?? '';
-            $conversion = convert_itop_selections_to_cmids($itop_selections, $courseid, $itop_stat);
+            $conversion = convert_itop_selections_to_cmids($itop_selections, $courseid);
             $col_migration['itop_selections_detail'] = $itop_selections;
             $col_migration['conversion'] = $conversion;
             $col_migration['target_cmids'] = $conversion['cmids'];
@@ -664,17 +558,10 @@ foreach ($courseids as $courseid) {
             sort($existing_cmids);
 
             if ($existing_cmids === $conversion['cmids']) {
-                // cmids coinciden, pero verificar si falta selectedcmids (CSV para el popup UI)
-                $has_selectedcmids = !empty($own_fd['selectedcmids'] ?? '');
-
-                if ($has_selectedcmids) {
-                    $col_migration['action'] = 'already_match';
-                    $summary['columns_already_match']++;
-                    $report_data['column_migrations'][] = $col_migration;
-                    continue;
-                }
-                // Falta selectedcmids — caer al flujo de migración para escribirlo
-                $col_migration['action_note'] = 'cmids_match_but_missing_selectedcmids';
+                $col_migration['action'] = 'already_match';
+                $summary['columns_already_match']++;
+                $report_data['column_migrations'][] = $col_migration;
+                continue;
             }
 
             // Determinar campo target.
@@ -713,8 +600,9 @@ foreach ($courseids as $courseid) {
         }
         if ($has_migrations && $applymode) {
             try {
-                $own_components = normalize_components($own_components);
-                $new_comp = raw_serialize($own_components);
+                $new_comp = function_exists('cr_serialize')
+                    ? cr_serialize($own_components)
+                    : base64_encode(serialize($own_components));
                 $DB->set_field('block_configurable_reports', 'components', $new_comp, ['id' => $own_rep->id]);
                 $report_data['db_updated'] = true;
                 $summary['reports_updated_in_db']++;
