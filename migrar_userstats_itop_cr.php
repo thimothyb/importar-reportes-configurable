@@ -274,6 +274,23 @@ define('ITOP_SELECTOR_MODULE_MAP', [
     'scorms' => 'scorm', 'scorm' => 'scorm', 'scorm_packages' => 'scorm',
 ]);
 
+// Mapeo stat type → tipo de módulo Moodle (para fallback cross-course).
+define('STAT_MODULE_MAP', [
+    'quiz_score' => 'quiz',
+    'quiz_completed_vs_total' => 'quiz',
+    'quiz_completed_vs_total_moodle_criteria' => 'quiz',
+    'quiz_average_score' => 'quiz',
+    'quiz_best_score' => 'quiz',
+    'quiz_num_completed' => 'quiz',
+    'assignment_num_completed_vs_total' => 'assign',
+    'assignment_average_score' => 'assign',
+    'assignment_completed' => 'assign',
+    'scorm_score' => 'scorm',
+    'scorm_completed_vs_total' => 'scorm',
+    'scorm_average_score' => 'scorm',
+    'course_modules_completed' => null,  // any module type
+]);
+
 function extract_itop_selected_items(array $formdata): array {
     $found = [];
     foreach (ITOP_SELECTOR_FIELDS as $field) {
@@ -362,7 +379,7 @@ function instance_ids_to_cmids(array $instance_ids, string $module_type, int $co
     return $results;
 }
 
-function convert_itop_selections_to_cmids(array $itop_selections, int $courseid): array {
+function convert_itop_selections_to_cmids(array $itop_selections, int $courseid, string $stat_type = ''): array {
     global $DB;
     $all_cmids = [];
     $details = [];
@@ -380,12 +397,34 @@ function convert_itop_selections_to_cmids(array $itop_selections, int $courseid)
             $details[] = ['field' => $field, 'module_type' => $module_type, 'input' => $values, 'conversions' => $converted];
         } else if (in_array($field, ['ids','actividades_recursos','activities','resources','activities_resources',
                                       'activityids','activity_ids','cmids','moduleids','module_ids'])) {
+            $valid_in_course = [];
             foreach ($values as $cid) {
                 if ($DB->record_exists('course_modules', ['id' => $cid, 'course' => $courseid])) {
-                    $all_cmids[] = $cid;
+                    $valid_in_course[] = $cid;
                 }
             }
-            $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values];
+            if (!empty($valid_in_course)) {
+                $all_cmids = array_merge($all_cmids, $valid_in_course);
+                $details[] = ['field' => $field, 'note' => 'cmids direct', 'input' => $values, 'valid' => $valid_in_course];
+            } else {
+                // Cross-course fallback: ids are from another course (template).
+                // Use stat_type to find equivalent activities in current course.
+                $fallback_module = STAT_MODULE_MAP[$stat_type] ?? null;
+                if ($fallback_module !== null) {
+                    $mod = $DB->get_record('modules', ['name' => $fallback_module], 'id');
+                    if ($mod) {
+                        $cms = $DB->get_records('course_modules', ['course' => $courseid, 'module' => $mod->id], 'id ASC', 'id');
+                        $fallback_cmids = array_map('intval', array_keys($cms));
+                        $all_cmids = array_merge($all_cmids, $fallback_cmids);
+                        $details[] = ['field' => $field, 'note' => 'cross-course fallback',
+                                      'input' => $values, 'fallback_module' => $fallback_module,
+                                      'fallback_cmids' => $fallback_cmids];
+                    }
+                } else if ($stat_type === 'course_modules_completed' || empty($fallback_module)) {
+                    // Generic: try to find original cmids' module types and map
+                    $details[] = ['field' => $field, 'note' => 'cross-course no module map', 'input' => $values, 'stat_type' => $stat_type];
+                }
+            }
         } else if (in_array($field, ['secciones', 'sections'])) {
             foreach ($values as $sn) {
                 $sec = $DB->get_record('course_sections', ['course' => $courseid, 'section' => $sn], 'id, sequence');
@@ -558,7 +597,8 @@ foreach ($courseids as $courseid) {
 
             $summary['columns_with_itop_selections']++;
 
-            $conversion = convert_itop_selections_to_cmids($itop_selections, $courseid);
+            $itop_stat = $itop_fd['stat'] ?? '';
+            $conversion = convert_itop_selections_to_cmids($itop_selections, $courseid, $itop_stat);
             $col_migration['itop_selections_detail'] = $itop_selections;
             $col_migration['conversion'] = $conversion;
             $col_migration['target_cmids'] = $conversion['cmids'];
