@@ -38,7 +38,8 @@ def main():
     if not courseid:
         return
 
-    ssh, sftp = connect_ssh(server)
+    ssh = connect_ssh(server)
+    sftp = ssh.open_sftp()
 
     # Upload
     local_php = SCRIPT_DIR / PHP_SCRIPT
