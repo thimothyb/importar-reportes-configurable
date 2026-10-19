@@ -1,0 +1,417 @@
+<title>Auditoría ASPASIA-02</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #012142;
+    --bg-card: #01264C;
+    --bg-card-alt: #003260;
+    --fg: #E2E6F2;
+    --fg-secondary: #a0b0c8;
+    --fg-muted: #6a7d96;
+    --accent: #0B93AA;
+    --accent-light: #0FCED3;
+    --warn: #D47A4A;
+    --good: #0B93AA;
+    --bad: #D47A4A;
+    --surface-gap: #012142;
+    --border: rgba(255,255,255,0.06);
+    color-scheme: dark;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #F0F3FC;
+      --bg-card: #ffffff;
+      --bg-card-alt: #E2E6F2;
+      --fg: #012142;
+      --fg-secondary: #34547A;
+      --fg-muted: #72A3C4;
+      --accent: #0B93AA;
+      --accent-light: #0ABCC9;
+      --warn: #c0623a;
+      --good: #0B93AA;
+      --bad: #c0623a;
+      --surface-gap: #F0F3FC;
+      --border: rgba(0,0,0,0.08);
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F0F3FC;
+    --bg-card: #ffffff;
+    --bg-card-alt: #E2E6F2;
+    --fg: #012142;
+    --fg-secondary: #34547A;
+    --fg-muted: #72A3C4;
+    --accent: #0B93AA;
+    --accent-light: #0ABCC9;
+    --warn: #c0623a;
+    --good: #0B93AA;
+    --bad: #c0623a;
+    --surface-gap: #F0F3FC;
+    --border: rgba(0,0,0,0.08);
+    color-scheme: light;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Poppins', system-ui, sans-serif;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  .container { max-width: 960px; margin: 0 auto; padding-block: 2rem; }
+
+  .header { margin-bottom: 2rem; }
+  .header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; color: var(--fg); }
+  .header .subtitle { font-size: 0.85rem; color: var(--fg-muted); margin-top: 0.25rem; }
+  .header .meta { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.75rem; font-size: 0.8rem; color: var(--fg-secondary); }
+  .header .meta span { display: flex; align-items: center; gap: 0.35rem; }
+
+  /* Hero stats */
+  .hero-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 2px;
+    margin-bottom: 2rem;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .hero-stat {
+    background: var(--bg-card);
+    padding: 1.25rem 1rem;
+    text-align: center;
+  }
+  .hero-stat .value {
+    font-size: 2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+  }
+  .hero-stat .value.bad { color: var(--bad); }
+  .hero-stat .value.good { color: var(--good); }
+  .hero-stat .label {
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-muted);
+    margin-top: 0.35rem;
+  }
+
+  /* Section */
+  .section { margin-bottom: 2rem; }
+  .section-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--fg);
+  }
+
+  /* Bar chart */
+  .chart-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+  .chart-card h3 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--fg);
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: 130px 1fr 52px;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+  }
+  .bar-row + .bar-row { border-top: 1px solid var(--border); }
+  .bar-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--fg-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar-track {
+    height: 20px;
+    background: var(--bg-card-alt);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 4px 0 0 4px;
+    transition: width 0.6s ease;
+    position: relative;
+  }
+  .bar-fill.full { border-radius: 4px; }
+  .bar-value {
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--fg-secondary);
+  }
+
+  /* Two-column grid */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  @media (max-width: 640px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
+  .grid-2 .chart-card { border-radius: 0; }
+
+  /* Breakdown list */
+  .breakdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.35rem 0;
+    font-size: 0.8rem;
+    color: var(--fg-secondary);
+  }
+  .breakdown-item + .breakdown-item { border-top: 1px solid var(--border); }
+  .breakdown-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .breakdown-count {
+    margin-left: auto;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--fg);
+  }
+
+  /* Finding cards */
+  .finding {
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.5rem;
+    border-left: 3px solid var(--bad);
+  }
+  .finding.info { border-left-color: var(--accent); }
+  .finding .finding-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 0.25rem;
+  }
+  .finding p {
+    font-size: 0.78rem;
+    color: var(--fg-secondary);
+    line-height: 1.55;
+  }
+  .finding code {
+    font-size: 0.74rem;
+    background: var(--bg-card-alt);
+    padding: 0.1em 0.4em;
+    border-radius: 3px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.72rem;
+    color: var(--fg);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 10;
+    white-space: nowrap;
+    display: none;
+  }
+</style>
+
+<div class="container">
+  <div class="header">
+    <h1>Auditoría: Informe Global vs Cálculo en Vivo</h1>
+    <p class="subtitle">Comparación de los valores del plugin (get_value → bridge cache) contra verificación independiente desde logstore</p>
+    <div class="meta">
+      <span>Servidor: ASPASIA-02 (ibecon)</span>
+      <span>Fecha: 6 oct 2026</span>
+      <span>50 cursos · 246 usuarios</span>
+    </div>
+  </div>
+
+  <!-- Hero stats -->
+  <div class="hero-row">
+    <div class="hero-stat">
+      <div class="value bad">922</div>
+      <div class="label">Discrepancias totales</div>
+    </div>
+    <div class="hero-stat">
+      <div class="value" style="color: var(--fg)">246</div>
+      <div class="label">Usuarios auditados</div>
+    </div>
+    <div class="hero-stat">
+      <div class="value" style="color: var(--fg)">50</div>
+      <div class="label">Cursos (todos con cache)</div>
+    </div>
+    <div class="hero-stat">
+      <div class="value good">100%</div>
+      <div class="label">nota_final · correos · alumnos</div>
+    </div>
+  </div>
+
+  <!-- Match rate chart -->
+  <div class="section">
+    <div class="chart-card">
+      <h3>Tasa de coincidencia por campo</h3>
+      <div id="match-chart"></div>
+    </div>
+  </div>
+
+  <!-- Two-column details -->
+  <div class="section">
+    <div class="grid-2">
+      <div class="chart-card">
+        <h3>tiempo_total — magnitud de diferencia</h3>
+        <p style="font-size:0.75rem;color:var(--fg-muted);margin-bottom:0.75rem">243 de 246 discrepantes. Promedio: 7h 5min.</p>
+        <div id="tiempo-buckets"></div>
+      </div>
+      <div class="chart-card">
+        <h3>primer_acceso — tipo de discrepancia</h3>
+        <p style="font-size:0.75rem;color:var(--fg-muted);margin-bottom:0.75rem">88 discrepancias, mayoría por formato o cache congelado.</p>
+        <div id="primer-breakdown"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key findings -->
+  <div class="section">
+    <h2 class="section-title">Hallazgos clave</h2>
+
+    <div class="finding">
+      <div class="finding-title">Bug confirmado: registros → distinct_days_connection</div>
+      <p>En 216 de 246 usuarios, el valor de <code>registros</code> del plugin es idéntico al de <code>dias_conexion</code>. El bridge STAT_MAP mapea <code>registros</code> a <code>distinct_days_connection</code> de iTOP en vez del conteo real de logs. El usuario ve "2 registros" cuando en realidad tiene 16 accesos. Match rate: 0.4%.</p>
+    </div>
+
+    <div class="finding">
+      <div class="finding-title">Cache bridge severamente desactualizado</div>
+      <p>El <code>ultimo_acceso</code> del cache está en promedio 58 días atrás del real, con un máximo de 422 días. En 63 casos la verificación muestra fechas más recientes; el cache quedó congelado cuando iTOP dejó de sincronizar. En 12 casos de <code>primer_acceso</code>, el plugin dice "No visitado" cuando el usuario sí accedió al curso.</p>
+    </div>
+
+    <div class="finding">
+      <div class="finding-title">tiempo_total: 82% subreporta el tiempo real</div>
+      <p>En 201 de 243 casos discrepantes, la verificación en vivo calcula más tiempo que el cache del plugin. 121 usuarios tienen diferencias mayores a 2 horas, con un máximo de 112.4 horas. El cache bridge no refleja la actividad posterior a la última sincronización de iTOP.</p>
+    </div>
+
+    <div class="finding info">
+      <div class="finding-title">Campos sin problemas: correos, mensajes_alumnos, nota_final</div>
+      <p>100% de coincidencia en los tres. <code>correos</code> y <code>mensajes_alumnos</code> se comparan solo como output (lógica compleja de staff-target). <code>nota_final</code> ahora coincide tras corregir el falso positivo de locale (coma vs punto).</p>
+    </div>
+  </div>
+
+  <!-- Recommended actions -->
+  <div class="section">
+    <h2 class="section-title">Acciones recomendadas</h2>
+    <div class="chart-card">
+      <div style="display:grid;gap:0.6rem;font-size:0.82rem;color:var(--fg-secondary);line-height:1.6">
+        <div><span style="color:var(--bad);font-weight:600">1.</span> Agregar <code>registros</code>, <code>tiempo_total</code> y <code>dias_conexion</code> a <code>EXCLUDED_STATS</code> en bridge.php — fuerza cálculo en vivo para estos campos.</div>
+        <div><span style="color:var(--bad);font-weight:600">2.</span> Corregir el STAT_MAP: <code>registros</code> debería apuntar al conteo de logs, no a <code>distinct_days_connection</code>.</div>
+        <div><span style="color:var(--bad);font-weight:600">3.</span> Evaluar excluir <code>primer_acceso</code> y <code>ultimo_acceso</code> del bridge, o implementar invalidación del cache cuando el usuario accede al curso.</div>
+        <div><span style="color:var(--accent);font-weight:600">4.</span> Ejecutar la auditoría corregida en los demás servidores ASPASIA (01, 03, etc.) para confirmar el patrón.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const good = getComputedStyle(document.documentElement).getPropertyValue('--good').trim() || '#0B93AA';
+  const bad = getComputedStyle(document.documentElement).getPropertyValue('--bad').trim() || '#D47A4A';
+
+  // Match rate data
+  const stats = [
+    { label: 'nota_final',       rate: 100,  disc: 0,   total: 246 },
+    { label: 'correos',          rate: 100,  disc: 0,   total: 246 },
+    { label: 'mensajes_alumnos', rate: 100,  disc: 0,   total: 246 },
+    { label: 'mensajes_foro',    rate: 99.6, disc: 1,   total: 246 },
+    { label: 'primer_acceso',    rate: 64.2, disc: 88,  total: 246 },
+    { label: 'dias_conexion',    rate: 30.5, disc: 171, total: 246 },
+    { label: 'ultimo_acceso',    rate: 29.3, disc: 174, total: 246 },
+    { label: 'tiempo_total',     rate: 1.2,  disc: 243, total: 246 },
+    { label: 'registros',        rate: 0.4,  disc: 245, total: 246 },
+  ];
+
+  const chartEl = document.getElementById('match-chart');
+  stats.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const color = s.rate >= 90 ? good : s.rate >= 50 ? 'var(--fg-muted)' : bad;
+    row.innerHTML = `
+      <div class="bar-label">${s.label}</div>
+      <div class="bar-track">
+        <div class="bar-fill ${s.rate >= 99.5 ? 'full' : ''}" style="width:${Math.max(s.rate, 1)}%;background:${color}"></div>
+      </div>
+      <div class="bar-value" style="color:${color}">${s.rate}%</div>
+    `;
+    row.title = `${s.disc} discrepancias de ${s.total}`;
+    chartEl.appendChild(row);
+  });
+
+  // Tiempo buckets
+  const tiempoBuckets = [
+    { label: '< 5 min',     count: 33,  pct: 14 },
+    { label: '5–30 min',    count: 51,  pct: 21 },
+    { label: '30 min – 2h', count: 38,  pct: 16 },
+    { label: '> 2 horas',   count: 121, pct: 50 },
+  ];
+  const tiempoEl = document.getElementById('tiempo-buckets');
+  tiempoBuckets.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.style.gridTemplateColumns = '100px 1fr 36px';
+    const intensity = b.pct / 50;
+    row.innerHTML = `
+      <div class="bar-label">${b.label}</div>
+      <div class="bar-track">
+        <div class="bar-fill" style="width:${b.pct}%;background:${bad};opacity:${0.5 + intensity * 0.5}"></div>
+      </div>
+      <div class="bar-value">${b.count}</div>
+    `;
+    tiempoEl.appendChild(row);
+  });
+
+  // Primer acceso breakdown
+  const primerTypes = [
+    { label: 'Falso positivo (mismo valor)',     count: 37, color: 'var(--fg-muted)' },
+    { label: 'Formato sin espacio en fecha',     count: 23, color: 'var(--fg-muted)' },
+    { label: 'Fechas realmente diferentes',      count: 15, color: bad },
+    { label: '"No visitado" pero sí visitó',     count: 12, color: bad },
+    { label: 'Solo fecha sin hora',              count: 1,  color: 'var(--fg-muted)' },
+  ];
+  const primerEl = document.getElementById('primer-breakdown');
+  primerTypes.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'breakdown-item';
+    item.innerHTML = `
+      <span class="breakdown-dot" style="background:${t.color}"></span>
+      <span>${t.label}</span>
+      <span class="breakdown-count">${t.count}</span>
+    `;
+    primerEl.appendChild(item);
+  });
+})();
+</script>
